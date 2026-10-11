@@ -1,0 +1,402 @@
+# 360 video → Gaussian splat pipeline
+
+Turns stitched 360° video (e.g. DJI Avata 360) into a Gaussian splat `.ply`, end to end:
+
+```
+extract → select → slice → sfm → gate → train → export
+ffmpeg    sharpest  360→13    COLMAP or   quality  gsplat + depth   out/<name>.ply
+          frames    pinhole   MapAnything check    prior trainer
+                    views     +COLMAP
+```
+
+```
+splats/
+├── foundry_app.py          # one entrypoint: detects PC / Docker / Foundry and runs the right mode
+├── splat_pipeline.py       # orchestrator (resumable stages), incl. the MapAnything+COLMAP hybrid
+├── train_gsplat.py         # our trainer (PyTorch + gsplat) + --check / --inspect / --depth-preview
+├── depth_prior.py          # monocular depth prior (selective, aligned to SfM)
+├── mapanything_init.py     # metric pose initialisation for sfm.mapper: mapanything
+├── splat_stream.py         # file <-> stream-record chunking for Foundry stream outputs
+├── foundry_transform/
+│   └── reconstruct_splats.py   # Foundry transform: rebuild files from the stream
+├── config.yaml             # every setting lives here
+├── requirements.txt        # PC install
+├── requirements-container.txt, Dockerfile, .dockerignore   # Foundry / Docker image
+├── FOUNDRY.md              # Foundry deployment guide
+├── tools/                  # COLMAP Windows release (COLMAP.bat, bin/, lib/) - you add this
+├── raw/                    # your equirectangular videos
+├── work/                   # per-video working folders (incl. pipeline.log)
+└── out/                    # final splats (.ply) + run summaries
+```
+
+---
+
+## 1. Capturing and exporting
+
+- Fly slowly and **move through the space** (forwards/back, up/down, side to side).
+  Hovering in one spot gives no parallax and the quality gate will reject it.
+  60 s for a room or patio is plenty.
+- Indoors: prop wash moves curtains/plants (→ floaters); lock exposure if you can.
+- **Export from DJI Studio as stitched equirectangular**, not the raw `.OSV`:
+  drag one clip to the timeline → set D-Log M colour recovery (only if shot in D-Log M)
+  → perspective *Free View* → Export → *Panoramic Video*.
+  - Resolution **8K 7680×3840** (must be 2:1), bitrate at max (480 Mbps),
+    SDR Rec709, 10-bit fine.
+  - Frame rate: pick the rate you recorded at if offered (avoids blended frames).
+  - Noise reduction: on for dim scenes, off for well-lit ones (it can smooth away texture).
+  - Turn on horizon levelling if available, so "up" in the video is real up.
+
+---
+
+## 2. Windows setup (NVIDIA GPU)
+
+Tested on Windows 10 + RTX 2080 (8 GB). Every problem we hit is listed in
+**Troubleshooting** below with its fix.
+
+### 2.1 Put the project in a path with no spaces
+
+e.g. `C:\Users\you\Documents\MyDocuments\splats` or simply `C:\splats`.
+Spaces in the path ("My Documents") break COLMAP's launcher and gsplat's CUDA build.
+
+### 2.2 ffmpeg
+
+```
+winget install Gyan.FFmpeg
+```
+
+Then **close and reopen the terminal** and check `ffprobe -version`. If it's still not
+found, see Troubleshooting → *ffprobe not recognised*.
+
+### 2.3 NVIDIA driver
+
+Install the latest Game Ready or Studio driver and reboot. `nvidia-smi` should show
+driver **580+ / CUDA 13.x** (needed by current COLMAP CUDA builds).
+
+### 2.4 COLMAP
+
+Download the **CUDA** Windows release from github.com/colmap/colmap/releases and unzip
+it into `tools\` so you have `tools\COLMAP.bat`, `tools\bin\colmap.exe`, `tools\lib\`.
+In `config.yaml`:
+
+```yaml
+sfm:
+  colmap_bin: tools/COLMAP.bat   # the pipeline calls bin\colmap.exe directly
+  use_gpu: true
+```
+
+Quick test: `tools\bin\colmap.exe help` prints a version with "with CUDA".
+
+### 2.5 Compilers for gsplat (one-off)
+
+1. **Visual Studio 2022 Build Tools** with the C++ workload:
+   ```
+   winget install Microsoft.VisualStudio.2022.BuildTools --override "--add Microsoft.VisualStudio.Workload.VCTools --includeRecommended --passive"
+   ```
+2. **CUDA Toolkit 12.8** from NVIDIA's CUDA Toolkit Archive (Windows → x86_64 → exe local),
+   default options. It must match the `cu128` PyTorch below. Check: `nvcc --version` → `release 12.8`.
+
+### 2.6 Open the right terminal
+
+From the Start menu open **x64 Native Tools Command Prompt for VS 2022**
+(the name must start with **x64**). Check:
+
+```
+cl
+```
+
+The first line must end with **`for x64`**. If it says `for x86`, run:
+
+```
+"C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat"
+```
+
+Use this prompt for installing gsplat and the first `--check`.
+
+### 2.7 Python virtual environment
+
+We use the **Python 3.11** that's already installed (3.12 wasn't). Don't install into the
+system Python: it has a CPU-only PyTorch that will silently be used instead.
+
+```
+cd C:\Users\you\Documents\MyDocuments\splats
+py -3.11 -m venv .venv
+.venv\Scripts\activate
+python -m pip install --upgrade pip
+pip install -r requirements.txt
+```
+
+The prompt must now start with `(.venv)`. **Every new terminal needs
+`.venv\Scripts\activate` again.**
+
+> **Always use `python`, never `py`, once the venv is active.** `py` ignores the venv and
+> runs the system Python (CPU-only torch → "CUDA not available").
+
+### 2.8 PyTorch (CUDA build, version 2.8.0)
+
+```
+pip install torch==2.8.0 --index-url https://download.pytorch.org/whl/cu128
+python -c "import torch; print(torch.__version__, torch.cuda.is_available())"
+```
+
+Must print `2.8.0+cu128 True`. (torch 2.11 fails to build gsplat on Windows, see below.)
+
+### 2.9 gsplat, plus the Windows patch
+
+```
+pip install packaging
+pip install gsplat
+```
+
+gsplat 1.5.3 passes a Linux-only compiler flag that Microsoft's `cl` rejects. Remove it:
+
+```
+python -c "import pathlib;p=pathlib.Path(r'.venv\Lib\site-packages\gsplat\cuda\_backend.py');s=p.read_text();print('found',s.count('-Wno-attributes'));p.write_text(s.replace('\"-Wno-attributes\"','').replace(\"'-Wno-attributes'\",''))"
+findstr /s /n /c:"Wno-attributes" .venv\Lib\site-packages\gsplat\*.py
+```
+
+The `findstr` should now print nothing. **Reapply this after any gsplat reinstall/upgrade.**
+
+### 2.10 Build and test gsplat
+
+```
+rmdir /s /q "%LOCALAPPDATA%\torch_extensions"
+python train_gsplat.py --check > build.log 2>&1
+findstr /i /c:"error" /c:"OK:" build.log
+```
+
+The build takes 5–15 minutes with no visible progress (output goes to `build.log`).
+Success is:
+
+```
+OK: rendered and back-propagated through gsplat on the GPU
+```
+
+After this the compiled kernels are cached and any terminal (with the venv active) works.
+
+---
+
+## 3. Running
+
+Close GPU-hungry apps first (Ollama, DJI Studio, Wallpaper Engine, games).
+
+```
+python splat_pipeline.py raw/patio.mp4 --config config.yaml --until-stage gate   # check capture first
+python splat_pipeline.py raw/patio.mp4 --config config.yaml                      # full run
+```
+
+Finished stages are skipped on re-runs. Other useful commands:
+
+```
+python splat_pipeline.py raw/ --config config.yaml                          # every video in a folder
+python splat_pipeline.py raw/patio.mp4 --config config.yaml --from-stage train   # retrain only
+python train_gsplat.py --inspect --data work/patio --config config.yaml     # is the geometry sound?
+```
+
+To **retrain from scratch** with new settings: `rmdir /s /q work\patio\train` first
+(otherwise it resumes from the last checkpoint).
+
+### What to expect (patio, 60 s clip, RTX 2080)
+
+| Stage | Time |
+|---|---|
+| extract + select + slice | ~3 min |
+| feature extraction (GPU) | ~3 min |
+| sequential matching (GPU) | ~8 min |
+| mapper: `colmap` incremental | ~2 h 20 min |
+| mapper: `colmap_global` | minutes, but hung on the 214-frame re-run |
+| mapper: `mapanything` (hybrid) | MapAnything minutes + COLMAP triangulation/BA (expected well under the incremental mapper) |
+| training, 1M Gaussians, 30k steps | ~48 min, 2.2 GB VRAM |
+| training, 3M Gaussians | ~1.5–2 h (estimate) |
+
+Result: 1,562 / 1,859 images registered (the missing ones were mostly straight-up sky views),
+training PSNR ≈ 26.
+
+### Reading the outputs
+
+- Final splat: `out\<name>.ply`. Drag into **superspl.at/editor** to view, crop floaters,
+  rescale and export compressed formats.
+- Everything is logged to `work\<name>\pipeline.log`, even if you close the terminal:
+  ```
+  findstr /c:"psnr" work\patio\pipeline.log                       # training progress
+  findstr /c:"Aligned" /c:"disagree" work\patio\pipeline.log       # orientation check
+  powershell -c "Get-Content work\patio\pipeline.log -Tail 20"      # end of run
+  powershell -c "Get-Content work\patio\pipeline.log -Tail 20 -Wait"  # watch live
+  type work\patio\train\train_stats.json
+  ```
+
+### Judging quality honestly
+
+The `psnr` in the progress lines is measured on training photos, so it flatters the model.
+Every 20th image is held out (`test_every`) and scored every 5,000 steps:
+
+```
+findstr /c:"EVAL" work\patio\pipeline.log
+```
+
+Compare **held-out PSNR** between runs to know whether a change really helped. At the end,
+`work\<name>\train\eval\` contains side-by-side *photo | splat* JPGs of unseen views,
+the quickest way to see where blur is.
+
+`exposure: true` learns a small colour/exposure correction per photo, so auto-exposure
+shifts (sky ↔ shade ↔ glass) don't get baked into the splat as blur and floaters.
+
+### Faster, metric SfM: the MapAnything + COLMAP hybrid
+
+Set `sfm.mapper: mapanything` to replace COLMAP's slow incremental mapper:
+
+1. **MapAnything** (Meta, Apache-2.0 weights) predicts **metric** camera poses for 4
+   horizontal views per 360 frame, in overlapping windows, using our exact intrinsics.
+   Each frame's views are fused into one rig pose (they share one physical camera), and
+   the windows are stitched into one world.
+2. **COLMAP** then triangulates points with those poses held fixed and bundle-adjusts
+   (`refine_rounds` passes), so final precision comes from real feature matches.
+3. Images COLMAP couldn't constrain (`min_observations`) are dropped, and the model is
+   mapped back onto MapAnything's metric frame, so **the scene comes out in metres**.
+
+If anything in this route fails, it logs why and falls back to `mapanything.fallback`
+(default `colmap`), so a run never dies just because of it. `sfm_stats.json` records which
+mapper actually ran, plus `colmap_vs_mapanything_rms_m` (how far COLMAP moved
+MapAnything's cameras) and `view_agreement_deg` in `ma_init/report.json` (how consistent
+MapAnything was within each frame).
+
+**Install on Windows.** Use a separate venv: MapAnything pins its own OpenCV version, which
+clashes with the main one. Git must be installed.
+
+```
+py -3.11 -m venv venv-ma
+venv-ma\Scripts\activate
+pip install torch==2.8.0 --index-url https://download.pytorch.org/whl/cu128
+pip install "mapanything @ git+https://github.com/facebookresearch/map-anything.git"
+deactivate
+```
+
+then in `config.yaml`:
+
+```yaml
+sfm:
+  mapper: mapanything
+  mapanything:
+    python: venv-ma/Scripts/python.exe
+```
+
+The first run downloads the model (a few GB). On an 8 GB GPU keep `window_frames` at 8-16;
+if it runs out of memory, lower it. The RTX 2080 has no bf16, so it automatically uses fp16.
+To compare against COLMAP alone, run the same video with both mappers and compare the
+gate numbers, `--inspect` and held-out PSNR.
+
+### Depth prior (steadier walls and floors from thin captures)
+
+With `train.custom.depth_prior: true` (the default) the trainer first predicts a depth map for
+every training image with a monocular model, then:
+
+1. **aligns each map to the SfM points that image saw** (robust scale + shift, auto-detecting
+   depth vs inverse depth); images whose prior doesn't fit the real geometry are skipped;
+2. **only leans on it where geometry is weak**: areas full of tracked SfM points get a low
+   weight (`depth_min_weight`), sparse areas get full weight (`depth_mode: selective`);
+3. adds a disparity + depth-gradient loss that fades out over training.
+
+Models: Depth Anything 3 mono if installed, otherwise Depth Anything V2 Small via
+`transformers` (both Apache-2.0). The first run downloads ~100 MB and caches priors in
+`work/<name>/depth_prior/`, so retraining reuses them.
+
+Check the priors before a long training run (a few minutes, no training):
+
+```
+pip install transformers
+python train_gsplat.py --depth-preview --data work/patio --config config.yaml
+```
+
+Look at `work\patio\depth_prior\preview\*.jpg`: photo | aligned depth | weight (white =
+supervised). The log reports how many images got a prior and how many were rejected.
+To compare fairly, retrain with `depth_prior: false` once and compare **held-out PSNR** and
+the `eval\` images.
+
+### Orientation and scale
+
+- COLMAP doesn't know which way is up, so raw results can be tilted.
+  With `train.custom.align: true` the trainer uses the known 360 view directions to
+  level the scene, centre it on the flight path and face the drone's starting heading.
+  `up_axis: "+y"` suits SuperSplat; use `"+z"` for Blender/Unreal.
+- COLMAP units are arbitrary. Measure something real (e.g. the door) in the viewer and set
+  `world_scale = real_size / viewer_size` in `config.yaml`, then retrain.
+
+### Warping or blur? Run the inspector
+
+```
+python train_gsplat.py --inspect --data work/patio --config config.yaml
+```
+
+It checks that the 13 views cut from each 360 frame agree on position and angle (they
+physically share one camera). "Consistent" → geometry is fine; work on capture/training.
+"INCONSISTENT" → SfM error (often glass/water reflections), which retraining won't fix.
+
+---
+
+## 4. Troubleshooting (everything we hit)
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `zsh: command not found: pip` / `No module named 'cv2'` (Mac) | venv not active | `source .venv/bin/activate` |
+| `Executable not found: ffprobe` / `'ffprobe' is not recognized` | PATH not refreshed after winget | Reopen terminal. Else find it: `where /R "%LOCALAPPDATA%\Microsoft\WinGet" ffprobe.exe` and add that `\bin` folder to *User Path* (Start → "environment variables"). Don't use `setx PATH`. |
+| `... was unexpected at this time` from `COLMAP.bat` | .bat breaks on paths with spaces | Fixed in code (calls `bin\colmap.exe`). Also: no spaces in project path. |
+| COLMAP exits instantly, code `3221226505` / `-1073740791`, no output | NVIDIA driver too old for the CUDA build (576.28 / CUDA 12.9 failed) | Update driver to 580+ and reboot. Temporary workaround: `sfm.use_gpu: false` |
+| `SQLite error: unable to open database file` | Database path not writable (e.g. `C:\`) | Use a path inside the project |
+| Mapper takes hours | Incremental mapper on ~1,800 images | `sfm.mapper: colmap_global` |
+| SfM split into several models | Gaps/blurry stretches in the flight | Normal if small; the largest is used |
+| `torch 2.6.0+cpu ... False` | Ran with `py` or outside the venv (system Python) | Activate venv, use `python` |
+| `No suitable Python runtime found` for `py -3.12` | 3.12 not installed | Use `py -3.11` |
+| `Permission denied ... .venv\Scripts\python.exe` / `Access is denied` deleting `.venv` | Old venv still in use (terminal, VS Code) | Close terminals + VS Code, `taskkill /f /im python.exe`, or reboot; or make a new venv named `venv` |
+| A moved/renamed project's venv misbehaves | venvs hard-code their location | Delete and recreate it |
+| `No module named 'packaging'` | Missing build dependency | `pip install packaging` |
+| `gsplat: No CUDA toolkit found` then `'NoneType' ... 'CameraModelType'` | CUDA Toolkit missing or not visible | Install CUDA Toolkit 12.8, open a fresh x64 prompt. Or `set CUDA_HOME=C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.8` and `set PATH=%CUDA_HOME%\bin;%PATH%` |
+| `asm operand type size(8) does not match ... constraint 'r'` | 32-bit compiler (wrong prompt) | Use **x64** Native Tools prompt; `cl` must say `for x64` |
+| `CUDACachingAllocator.h ... invalid combination of type specifiers` | torch 2.11 header clash on Windows | `pip install torch==2.8.0 --index-url https://download.pytorch.org/whl/cu128` |
+| `cl : Command line error D8021 : invalid numeric argument '/Wno-attributes'` | gsplat Linux-only flag | Apply the patch in 2.9 |
+| Build fails and you can't see why (only warnings visible) | Real error scrolled away | `python train_gsplat.py --check > build.log 2>&1` then `findstr /i /c:"error" build.log` |
+| Any failed gsplat build | Stale half-built cache | `rmdir /s /q "%LOCALAPPDATA%\torch_extensions"` before retrying |
+| GPU out of memory in training | Too many Gaussians / other apps | Lower `cap_max`, or `downscale: 2`, close GPU apps |
+| Splat tilted / walls overhead | Arbitrary COLMAP axes | `align: true` (default) and retrain; or rotate in SuperSplat |
+| Splat huge in viewer | Arbitrary COLMAP units | `world_scale`, or scale uniformly in SuperSplat |
+| `No depth model could be loaded` | `transformers` missing, or no internet for the first download | `pip install transformers`, or set `depth_prior: false` |
+| Depth prior step runs out of GPU memory | Batch too big | `depth_batch: 2` |
+| Most priors rejected | Weak SfM fit for those images | Check `depth_prior\<tag>\*.skip` reasons; raise `depth_max_rel_error` cautiously |
+| `MapAnything route failed ... Falling back` | MapAnything not installed in `mapanything.python`, out of GPU memory, or no internet on first run | Read the error above it; lower `window_frames`; check `mapanything.python` |
+| Hybrid drops many images (`dropped_weak`) | Those views had too few feature matches to verify | Normal for sky/blank walls; if most are dropped, use `mapper: colmap` for that capture |
+
+---
+
+## 5. Mac notes
+
+Homebrew `colmap` has no CUDA (`sfm.use_gpu: false`), and gsplat needs an NVIDIA GPU, so
+on Apple Silicon run up to `--until-stage gate` and train with a Mac-capable trainer
+(e.g. Brush) pointed at `work/<name>/`.
+
+---
+
+## 6. One entrypoint for everywhere
+
+`foundry_app.py` detects where it's running and picks the right mode, so the same command
+works on your PC, in Docker and in Foundry:
+
+```
+python foundry_app.py            # PC: processes raw\*.mp4 -> out\<name>\..., keeps work\
+python foundry_app.py --detect   # just print what it detected
+```
+
+| Where | How it's detected | What it does |
+|---|---|---|
+| Foundry pipeline module | `BUILD2_TOKEN` + `RESOURCE_ALIAS_MAP` set | watches the input dataset, streams results |
+| Foundry function module | `GET_JOB_URI` / `MODULE_AUTH_TOKEN` set | serves `start_splat` / `splat_status` |
+| Docker on your PC | `/.dockerenv` or `/input` exists | `/input` -> `/output`, work in `/work` |
+| Plain PC | none of the above | `raw\` -> `out\`, work kept in `work\` |
+
+Videos that already have a `.ply` in the output are skipped (`SPLAT_FORCE=1` redoes them).
+`SPLAT_MODE=pipeline|function|local` forces a mode. `splat_pipeline.py` still works directly
+when you want stage-level control (`--from-stage`, `--until-stage`).
+
+## 7. Running on Palantir Foundry
+
+The project is packaged for Foundry compute modules: `Dockerfile`, `foundry_app.py`,
+`requirements-container.txt`, `.dockerignore`. See **FOUNDRY.md** for the step-by-step
+deployment guide (build, local test with `docker run --gpus all`, datasets, module
+configuration, environment variables, troubleshooting).

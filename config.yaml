@@ -1,0 +1,178 @@
+# splat_pipeline config. Anything omitted falls back to the defaults in the script.
+
+extract:
+  fps: 6              # raw extraction rate; the select stage thins this out
+  max_frames: 0       # 0 = whole video
+  keep_raw: false     # delete raw frames after selection to save disk
+
+select:
+  target_fps: 3       # keep the sharpest frame in every (fps / target_fps) window
+                      # 3 = more viewpoints than 2 (patio v1 used 2); helps blur on weak sides
+  min_sharpness: 0    # Laplacian-variance floor; check pipeline.log for typical values
+
+slice:
+  size: 1600          # px per view. 8K equirect = ~1920 px native per 90 deg view
+  fov_deg: 90
+  # [yaw, pitch] in degrees. Positive pitch looks up. No downward views by default
+  # because the bottom of a 360 frame usually contains the stick/drone/operator.
+  views:
+    - [0, 0]
+    - [45, 0]
+    - [90, 0]
+    - [135, 0]
+    - [180, 0]
+    - [225, 0]
+    - [270, 0]
+    - [315, 0]
+    - [0, 45]
+    - [90, 45]
+    - [180, 45]
+    - [270, 45]
+    - [0, 90]          # straight up: remove for outdoor scenes (open sky never registers)
+    # Floor coverage: uncomment these and set nadir_mask_deg so the mount is ignored by SfM
+    # - [0, -45]
+    # - [90, -45]
+    # - [180, -45]
+    # - [270, -45]
+  nadir_mask_deg: null   # e.g. -60: pixels below -60 deg latitude are masked for SfM
+  jpeg_quality: 95
+  workers: 8
+
+sfm:
+  colmap_bin: tools/COLMAP.bat   # Windows release; on Linux/containers just: colmap
+  # "colmap"        incremental mapper: robust, slow (your patio took ~2h20m)
+  # "colmap_global" COLMAP 4.x built-in GLOMAP: usually minutes for the same data
+  # "glomap"        standalone GLOMAP binary (glomap_bin)
+  # "mapanything"   hybrid: MapAnything predicts metric poses in minutes, then COLMAP
+  #                 triangulates + bundle-adjusts them (precision from COLMAP, real-world
+  #                 metres from MapAnything). Falls back to `mapanything.fallback` on failure.
+  mapper: colmap          # global mapper hung/crashed on the 214-frame patio run; incremental is proven
+  glomap_bin: glomap
+  matcher: sequential    # "sequential" for video; "exhaustive" for small (<~500 image) sets
+  sequential_overlap_frames: 4   # match each frame's views against this many neighbour frames
+  use_gpu: true
+  max_features: 8192     # 4096 roughly halves matching time
+  fix_intrinsics: true   # intrinsics are known exactly from the slicing, so don't refine them
+  mapanything:
+    python: ""             # Python with MapAnything installed; "" = the one running the pipeline.
+                           # e.g. venv-ma/Scripts/python.exe if you keep it in a separate venv
+    fallback: colmap       # mapper to use if the MapAnything route fails ("" = stop instead)
+    refine_rounds: 2       # COLMAP triangulate + bundle-adjust passes
+    min_observations: 30   # images with fewer triangulated points after refinement are dropped
+    settings:
+      model: facebook/map-anything-apache   # Apache-2.0 weights (commercial use OK)
+      views: auto          # view indices fed to MapAnything; auto = 4 horizontal views per frame
+      window_frames: 16    # 360 frames per call (x4 views = 64 images). 8 GB GPU: 8-16. A100: 64+
+      overlap_frames: 4    # frames shared between windows, used to stitch them together
+      window_scale: estimate
+      minibatch_size: 1    # lowest GPU memory
+
+gate:
+  min_registered_ratio: 0.7   # fraction of images SfM must place
+  min_parallax_ratio: 0.05    # camera path extent / median scene depth
+
+train:
+  backend: custom        # key into the commands below. "custom" = train_gsplat.py
+  iterations: 30000
+
+  # Settings for the built-in trainer (train_gsplat.py)
+  custom:
+    strategy: mcmc       # mcmc keeps a fixed Gaussian budget, so VRAM use is predictable
+    cap_max: 3000000     # patio used 2.2 GB at 1M on the 2080; 3M should fit in 8 GB
+    sh_degree: 3
+    downscale: 1         # 2 = train at half resolution (~4x less memory per image)
+    ssim_lambda: 0.2
+    random_background: false
+    packed: true
+    cache_images: false  # true keeps images in RAM: ~12 GB for 1,562 x 1600px views
+    loader_threads: 4
+    log_every: 100
+    save_every: 5000     # checkpoint interval; interrupted runs resume from the last one
+    align: true          # rotate scene upright + centre it, using the known 360 view directions
+    up_axis: "+y"        # "+y" SuperSplat/PlayCanvas/three.js, "+z" Blender/Unreal, "-y" raw COLMAP
+    world_scale: 1.0     # COLMAP units are arbitrary. Measure something (e.g. the door) in the
+                         # viewer and set this to real_size / viewer_size
+    exposure: true       # per-photo exposure/white-balance correction (reduces blur + floaters)
+    exposure_lr: 0.001
+    exposure_reg: 0.01
+    test_every: 20       # hold out every 20th image to score quality honestly (0 = off)
+    eval_every: 5000     # how often to print the held-out score
+
+    # Monocular depth prior: steadies walls/floors where the capture is thin (see depth_prior.py)
+    depth_prior: true
+    depth_backend: auto        # auto = Depth Anything 3 mono if installed, else DA2 Small (both Apache-2.0)
+    depth_model: ""            # empty = backend default
+    depth_process_res: 756     # DA3 inference size (multiple of 14); higher = sharper, slower
+    depth_batch: 8             # lower to 2-4 if the prior step runs out of GPU memory
+    depth_mode: selective      # selective = only where SfM geometry is weak; uniform = everywhere
+    depth_min_weight: 0.15     # how much the prior still counts where SfM points are dense
+    depth_weight: 0.1          # loss weight at the start; decays to depth_weight * depth_end_ratio
+    depth_end_ratio: 0.1
+    depth_grad_weight: 1.0     # surface-shape term (keeps flat things flat)
+    depth_min_points: 30       # SfM points an image needs for its prior to be trusted
+    depth_max_rel_error: 0.35  # priors that don't fit the SfM points this well are ignored
+
+  # Extra placeholders available to the templates, e.g. {gsplat_dir}
+  vars:
+    gsplat_dir: /opt/gsplat
+  # Each command is a list; placeholders: {data} {train_dir} {export_dir} {iterations} {name}
+  # {python} {script_dir} {config_path} plus anything in vars.
+  commands:
+    custom:
+      - "{python}"
+      - "{script_dir}/train_gsplat.py"
+      - --data
+      - "{data}"
+      - --out
+      - "{train_dir}"
+      - --iterations
+      - "{iterations}"
+      - --config
+      - "{config_path}"
+    nerfstudio:
+      - ns-train
+      - splatfacto
+      - --data
+      - "{data}"
+      - --output-dir
+      - "{train_dir}"
+      - --max-num-iterations
+      - "{iterations}"
+      - --viewer.quit-on-train-completion
+      - "True"
+      # If you run out of GPU memory with many images, try:
+      # - --pipeline.datamanager.cache-images
+      # - cpu
+      - colmap
+      - --colmap-path
+      - sparse/0
+      - --images-path
+      - images
+      - --downscale-factor
+      - "1"
+    gsplat:
+      - python
+      - "{gsplat_dir}/examples/simple_trainer.py"
+      - default
+      - --data_dir
+      - "{data}"
+      - --data_factor
+      - "1"
+      - --result_dir
+      - "{train_dir}"
+      - --max_steps
+      - "{iterations}"
+      - --save_ply
+      - --disable_viewer
+
+export:
+  # Optional post-training export. {config} = newest config.yml found under train_dir.
+  # If a backend has no entry, the newest .ply under train_dir is used directly.
+  commands:
+    nerfstudio:
+      - ns-export
+      - gaussian-splat
+      - --load-config
+      - "{config}"
+      - --output-dir
+      - "{export_dir}"

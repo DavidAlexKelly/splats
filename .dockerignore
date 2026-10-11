@@ -1,0 +1,11 @@
+# Keep the build context small: only the code and config go into the image
+*
+!splat_pipeline.py
+!train_gsplat.py
+!depth_prior.py
+!foundry_app.py
+!splat_stream.py
+!config.yaml
+!README.md
+!requirements-container.txt
+!mapanything_init.py

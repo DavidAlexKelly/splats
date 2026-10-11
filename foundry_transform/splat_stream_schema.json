@@ -1,0 +1,68 @@
+[
+  {
+    "type": "STRING",
+    "nullable": false,
+    "name": "record_type",
+    "customMetadata": {}
+  },
+  {
+    "type": "STRING",
+    "nullable": false,
+    "name": "run_id",
+    "customMetadata": {}
+  },
+  {
+    "type": "STRING",
+    "nullable": false,
+    "name": "video",
+    "customMetadata": {}
+  },
+  {
+    "type": "STRING",
+    "nullable": false,
+    "name": "file_path",
+    "customMetadata": {}
+  },
+  {
+    "type": "INTEGER",
+    "nullable": false,
+    "name": "chunk_index",
+    "customMetadata": {}
+  },
+  {
+    "type": "INTEGER",
+    "nullable": false,
+    "name": "chunk_count",
+    "customMetadata": {}
+  },
+  {
+    "type": "LONG",
+    "nullable": false,
+    "name": "total_bytes",
+    "customMetadata": {}
+  },
+  {
+    "type": "STRING",
+    "nullable": false,
+    "name": "sha256",
+    "customMetadata": {}
+  },
+  {
+    "type": "STRING",
+    "nullable": false,
+    "name": "data_b64",
+    "customMetadata": {}
+  },
+  {
+    "type": "STRING",
+    "nullable": true,
+    "name": "info",
+    "customMetadata": {}
+  },
+  {
+    "type": "STRING",
+    "nullable": false,
+    "name": "created_at",
+    "customMetadata": {}
+  }
+]

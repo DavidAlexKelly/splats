@@ -1,0 +1,12 @@
+# Core (pipeline + data loading)
+numpy
+opencv-python
+pyyaml
+scipy
+ninja        # speeds up gsplat's CUDA compile
+packaging    # needed by PyTorch when gsplat compiles its kernels
+transformers # depth prior: Depth Anything V2 Small (Apache-2.0)
+
+# Training - install these separately, in this order (see README):
+#   1. pip install torch==2.8.0 --index-url https://download.pytorch.org/whl/cu128
+#   2. pip install gsplat   (then apply the Windows patch in README 2.9)

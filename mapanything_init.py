@@ -77,9 +77,14 @@ def rot_angle_deg(R: np.ndarray) -> float:
 
 
 def parse_name(name: str):
-    """'f00012_v03.jpg' -> ('f00012', 3)."""
-    m = re.match(r"^(.*)_v(\d+)\.[A-Za-z]+$", name)
-    return (m.group(1), int(m.group(2))) if m else (None, None)
+    """'v03/f00012.jpg' (or legacy 'f00012_v03.jpg') -> ('f00012', 3)."""
+    try:
+        import naming
+    except ImportError:  # run from another folder
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import naming
+    parsed = naming.parse(name)
+    return parsed if parsed else (None, None)
 
 
 def auto_views(views: list) -> list[int]:
@@ -216,10 +221,12 @@ def run(data_dir: Path, out_dir: Path, s: dict):
     use_views = auto_views(views) if s["views"] == "auto" else [int(v) for v in s["views"]]
 
     frames_to_images: dict[str, list] = {}
-    for p in sorted((data_dir / "images").glob("*.jpg")):
-        frame, vi = parse_name(p.name)
+    img_root = data_dir / "images"
+    for p in sorted(img_root.rglob("*.jpg")):
+        rel = p.relative_to(img_root).as_posix()  # COLMAP image name, e.g. v03/f00012.jpg
+        frame, vi = parse_name(rel)
         if frame is not None and vi < len(views):
-            frames_to_images.setdefault(frame, []).append((p.name, vi))
+            frames_to_images.setdefault(frame, []).append((rel, vi))
     frame_list = sorted(frames_to_images)
     if len(frame_list) < 2:
         raise RuntimeError("Need at least 2 frames of sliced views in images/")

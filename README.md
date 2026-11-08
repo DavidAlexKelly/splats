@@ -3,10 +3,10 @@
 Turns stitched 360° video (e.g. DJI Avata 360) into a Gaussian splat `.ply`, end to end:
 
 ```
-extract → select → slice → sfm → gate → train → export
-ffmpeg    sharpest  360→13    COLMAP or   quality  gsplat + depth   out/<name>.ply
-          frames    pinhole   MapAnything check    prior trainer
-                    views     +COLMAP
+extract → select → slice     → sfm          → gate → train → export
+ffmpeg    sharpest  360→cube    COLMAP with    quality  gsplat + depth   out/<name>.ply
+          frames    map (6      a camera rig,  check    prior trainer
+                    views)      or MapAnything
 ```
 
 ```
@@ -16,12 +16,17 @@ splats/
 ├── train_gsplat.py         # our trainer (PyTorch + gsplat) + --check / --inspect / --depth-preview
 ├── depth_prior.py          # monocular depth prior (selective, aligned to SfM)
 ├── mapanything_init.py     # metric pose initialisation for sfm.mapper: mapanything
+├── naming.py               # view layouts (cube map / custom), image naming, COLMAP rig config
+├── scene_fill.py           # depth seeding, sky shell, floater cleanup (filling gaps, real data only)
+├── selftest.py             # checks every stage in minutes (see "Self-test")
 ├── splat_stream.py         # file <-> stream-record chunking for Foundry stream outputs
 ├── foundry_transform/
-│   └── reconstruct_splats.py   # Foundry transform: rebuild files from the stream
+│   ├── splat_transform.py      # Foundry lightweight transform (recommended Foundry route)
+│   ├── reconstruct_splats.py   # compute-module route: rebuild files from the stream
+│   └── splat_stream_schema.json
 ├── config.yaml             # every setting lives here
 ├── requirements.txt        # PC install
-├── requirements-container.txt, Dockerfile, .dockerignore   # Foundry / Docker image
+├── requirements-container.txt, Dockerfile, Dockerfile.quick, .dockerignore   # Foundry / Docker image
 ├── FOUNDRY.md              # Foundry deployment guide
 ├── tools/                  # COLMAP Windows release (COLMAP.bat, bin/, lib/) - you add this
 ├── raw/                    # your equirectangular videos
@@ -240,6 +245,99 @@ the quickest way to see where blur is.
 `exposure: true` learns a small colour/exposure correction per photo, so auto-exposure
 shifts (sky ↔ shade ↔ glass) don't get baked into the splat as blur and floaters.
 
+### How the 360 frames are used: cube map + camera rig
+
+Each 360 frame is cut into normal camera views that COLMAP and the trainer understand,
+saved as `images/v00/f00012.jpg` (view 0 of frame 12), `images/v01/f00012.jpg`, ...
+
+- **Cube map (default, `slice.layout: cubemap`)**: 6 non-overlapping faces
+  (front, right, back, left, up, down). Every part of the sphere appears exactly once, so the
+  trainer sees no duplicated pixels, and there are ~3x fewer images than the older 17
+  overlapping views. Drop faces with `slice.cubemap_faces` (e.g. `up` for open sky).
+  `slice.layout: custom` uses the overlapping `slice.views` list instead; then each pixel is
+  "owned" by its nearest view for SfM so features aren't extracted several times
+  (`sfm_masks/`), while training still uses every pixel.
+- **Camera rig (`sfm.rig: true`)**: the views of one frame share one centre with exactly
+  known rotations, and COLMAP (3.12+) is told so (`rig_config.json`, `rig_configurator`,
+  `--Mapper.ba_refine_sensor_from_rig 0`). It then solves one pose per 360 frame instead of
+  one per view: faster mapping, no single view drifting off on its own, and each image is
+  matched against every view of the neighbouring frames. A cube map **needs** the rig: its
+  faces don't overlap, so without one COLMAP can't link them (a synthetic test registered
+  50% without the rig vs 100% with it).
+- `sfm.sequential_overlap_frames` now counts neighbouring **frames** (quadratic spacing:
+  1, 2, 4, ... frames away). Old work folders with flat `f00012_v03.jpg` names still resume
+  and run the old per-view way.
+
+### Filling gaps from imperfect footage (real data only)
+
+Three steps in the trainer (`scene_fill.py`, all on by default, all in `train.custom`):
+
+- **Depth seeding** (`depth_seed`): where COLMAP found few points, the depth prior (already
+  aligned to the SfM scale) is back-projected into extra starting Gaussians, so training has
+  something to refine instead of an empty hole. Needs `depth_prior: true`.
+- **Sky shell** (`sky_shell`): a sphere of Gaussians far outside the scene, coloured from the
+  photos. Open sky and distant background draw there instead of rendering black or growing
+  floaters. It's ordinary Gaussians in the `.ply`, so every viewer shows it.
+- **Floater cleanup** (`prune`): before export, removes near-invisible Gaussians, specks
+  hugging the flight path, isolated specks and oversized blobs. `ckpt.pt` keeps the
+  uncleaned model; the held-out score is measured on the cleaned one.
+
+`train_stats.json` → `fill` reports how many seeds, sky points and pruned Gaussians each
+run had. To compare, run once with a step off (e.g. `"train": {"custom": {"prune": false}}`
+in `CONFIG_OVERRIDES`) - the transform publishes it as the next `_vN`.
+
+### Uneven light, haze and shimmer
+
+- **Bilateral grids** (`train.custom.bilagrid`, on): every photo gets a small, smooth grid of
+  colour corrections over position and brightness. It absorbs what the scene shouldn't have
+  to explain - auto exposure, white-balance drift, warm window light next to blue dusk - so
+  the trainer stops averaging it into grey haze and floaters. The grids aren't exported: the
+  `.ply` holds the consistent colours, and the corrections are kept averaging to "no change"
+  so the splat can't drift to a tint the grids then undo (an early version did: purple
+  splats). `train_stats.json` → `heldout_psnr_raw` scores the splat without any
+  corrections - what viewers show; it should be close to `heldout_psnr`. About 0.4 GB of extra GPU memory for ~1300 photos.
+- **Anti-aliasing** (`train.custom.antialiased`, on): Mip-Splatting style filtering, so fine
+  detail doesn't sparkle or thin out when you view from further away than the drone flew.
+  Tick **Anti-aliased** in the viewer for these splats (untick it for older ones).
+
+### AI fill-in with Difix3D+ (optional, separate step)
+
+What the real data can't show stays a hole or a smear. `difix_refine.py` fills it in after
+the fact, on a finished splat:
+
+1. re-cuts the exact training images from the video using the result's `scene/` bundle
+   (poses, chosen frames, settings; published with every result),
+2. renders the splat from viewpoints the drone never had (off the path, between cube faces),
+3. NVIDIA **Difix** (a one-step diffusion model) cleans each render, guided by the real
+   photo that shows the most of the same surfaces (checked for occlusion, so a nearby photo
+   looking at a bush doesn't get picked),
+4. keeps training on the real photos plus the cleaned views (weighted lower), over a few
+   rounds that move further from the path, while nudging every Gaussian to be clearly solid
+   or gone (`opacity_entropy`), which clears the see-through haze.
+
+Before scoring, it re-fits the per-photo colour corrections with the splat frozen, so the
+"before" number is fair. After each round it scores held-out real photos; a round that
+lowers the score by more than `max_round_drop` is undone and the later (further-out) rounds
+are skipped, and the best round is what's saved (`kept_round`; 0 = Difix didn't help, the
+original splat is kept). `*_raw` scores are without per-photo corrections.
+`difix_stats.json` also reports `reference_overlap` (how much of each new view its reference
+photo shows) and `faint_share` (share of see-through Gaussians left).
+
+It runs in its own environment in the image (`/opt/difix`, built by default; `--build-arg
+WITH_DIFIX=0` leaves it out), started by `difix_fix.py`. Settings: `difix:` in
+`config.yaml`. On Foundry it's its own transform, `foundry_transform/difix_transform.py`,
+that reads the splats dataset and writes `<result>_difix/` into a separate dataset; see
+FOUNDRY.md A6.
+
+Output: `<name>_difix.ply`, `difix_stats.json` (held-out PSNR on real photos before/after:
+expect it flat or slightly down - the gain is in views the drone never saw, so judge in the
+viewer) and `difix_preview/roundR_kk_render_difix_photo.jpg` (render | Difix | nearest real
+photo).
+
+**Licence:** Difix's code and weights are under the NVIDIA License, **non-commercial research
+and evaluation only**. The refined splat contains AI-generated content; keep the real-only
+one. For commercial work swap in NVIDIA Fixer (needs an Ampere-or-newer GPU, not a T4).
+
 ### Faster, metric SfM: the MapAnything + COLMAP hybrid
 
 Set `sfm.mapper: mapanything` to replace COLMAP's slow incremental mapper:
@@ -326,11 +424,20 @@ the `eval\` images.
 python train_gsplat.py --inspect --data work/patio --config config.yaml
 ```
 
-It checks that the 13 views cut from each 360 frame agree on position and angle (they
-physically share one camera). "Consistent" → geometry is fine; work on capture/training.
+It checks that the views cut from each 360 frame agree on position and angle (they
+physically share one camera). With the rig on they agree by construction, so the useful
+lines become the up-direction agreement and the registered-views count. "Consistent" → geometry is fine; work on capture/training.
 "INCONSISTENT" → SfM error (often glass/water reflections), which retraining won't fix.
 
 ---
+
+### Self-test
+(`--with-difix` also loads and runs Difix; `--only-difix` checks just that.)
+
+`python selftest.py` checks ffmpeg, COLMAP, torch/CUDA/gsplat, the depth model and MapAnything,
+then runs the whole pipeline on a tiny synthetic 360 video (a few minutes on a GPU). Run it after
+any setup change, and inside the Docker image before pushing it to Foundry
+(`docker run --rm --gpus all <image> python /opt/app/selftest.py`).
 
 ## 4. Troubleshooting (everything we hit)
 
@@ -400,3 +507,9 @@ The project is packaged for Foundry compute modules: `Dockerfile`, `foundry_app.
 `requirements-container.txt`, `.dockerignore`. See **FOUNDRY.md** for the step-by-step
 deployment guide (build, local test with `docker run --gpus all`, datasets, module
 configuration, environment variables, troubleshooting).
+
+## 8. Running on a rented GPU (RTX 5090 on RunPod / Vast.ai)
+
+See **RENTING_A_GPU.md**: build the 5090 image once (`pod\build_5090.cmd`), start a pod,
+upload videos, run `splat`, download the results. Same pipeline and settings as Foundry;
+results are versioned the same way (`patio`, `patio_v2`, `patio_difix`, ...).

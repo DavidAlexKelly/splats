@@ -1,0 +1,85 @@
+# Quick rebuild: layers small changes on top of an image you've already built, instead of
+# rebuilding COLMAP/torch/gsplat. Takes about a minute and pushes only a few small layers.
+#
+# Use it for:
+#   * the curl / shell-tools fix needed by Foundry container transforms
+#   * any change to the pipeline's .py files or config.yaml
+#
+# Build (from the splats folder, cmd):
+#   docker tag cremini-container-registry.palantirfoundry.com/hello-world:0.0.1 hello-world-base:0.0.1   (once)
+#   docker build --platform linux/amd64 -f Dockerfile.quick -t cremini-container-registry.palantirfoundry.com/hello-world:0.0.1 .
+#   docker push cremini-container-registry.palantirfoundry.com/hello-world:0.0.1
+# BASE is a local-only copy of the original big image, so the tag pushed to Foundry can be
+# overwritten as often as needed without stacking layers on top of earlier quick builds.
+#
+# BASE can be built with either user (5000 or 5001); this file switches it to 5001 if needed.
+# Do a full build with the normal Dockerfile only when dependencies change (COLMAP, torch,
+# gsplat, Python packages) or the stack of quick layers gets long.
+ARG BASE=hello-world-base:0.0.1
+FROM ${BASE}
+
+USER root
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        curl ca-certificates git coreutils sed grep gawk tar gzip unzip findutils procps bash \
+    && rm -rf /var/lib/apt/lists/* \
+    && curl --version | head -n 1
+
+# Repair the PyTorch stack. Installing MapAnything in the full build let pip pull in a
+# torchaudio (and possibly others) built for CUDA 13; transformers imports torchaudio whenever
+# it's installed, which fails at runtime with
+# "libcudart.so.13: cannot open shared object file". Put back the CUDA 12.6 builds that gsplat
+# was compiled against; does nothing if they're already correct.
+# cu126 for the Foundry/T4 image; the RTX 5090 image (pod/build_5090) passes cu128.
+ARG TORCH_CUDA=cu126
+RUN T=$(python -c "import torch; print(torch.__version__)"); \
+    TV=$(python -c "import torchvision; print(torchvision.__version__)" 2>/dev/null || echo none); \
+    echo "found torch $T, torchvision $TV"; \
+    if [ "$T" != "2.8.0+${TORCH_CUDA}" ]; then \
+        pip install --no-cache-dir "torch==2.8.0+${TORCH_CUDA}" --index-url https://download.pytorch.org/whl/${TORCH_CUDA} ; \
+    fi \
+    && if [ "$TV" != "0.23.0+${TORCH_CUDA}" ]; then \
+        pip install --no-cache-dir --no-deps --force-reinstall "torchvision==0.23.0+${TORCH_CUDA}" --index-url https://download.pytorch.org/whl/${TORCH_CUDA} ; \
+    fi \
+    && TA=$(python -c "import importlib.metadata as m; print(m.version('torchaudio'))" 2>/dev/null || echo none); \
+    echo "found torchaudio $TA"; \
+    if [ "$TA" != "none" ] && [ "$TA" != "2.8.0+${TORCH_CUDA}" ]; then \
+        pip install --no-cache-dir --no-deps --force-reinstall "torchaudio==2.8.0+${TORCH_CUDA}" --index-url https://download.pytorch.org/whl/${TORCH_CUDA} ; \
+    fi \
+    && BAD=$(grep -rl --include="*.so*" "libcudart.so.13" /opt/venv/lib/python3*/site-packages 2>/dev/null | grep -v "/site-packages/nvidia/" || true); \
+    if [ -n "$BAD" ]; then echo "Still built for CUDA 13 (needs libcudart.so.13):"; echo "$BAD"; exit 1; fi \
+    && python -c "import torch, torchvision, torchvision.ops, gsplat; from transformers import AutoImageProcessor, AutoModelForDepthEstimation as M; n='depth-anything/Depth-Anything-V2-Small-hf'; AutoImageProcessor.from_pretrained(n); M.from_pretrained(n); print('OK torch', torch.__version__, 'cuda', torch.version.cuda, 'torchvision', torchvision.__version__, 'gsplat', gsplat.__version__)" \
+    && (python -c "import mapanything" && echo "mapanything imports OK" || echo "WARNING: mapanything import failed (only matters for sfm.mapper: mapanything)")
+
+# Difix (optional AI fill-in for the separate Difix refine transform, difix_refine.py).
+# NVIDIA License: non-commercial research/evaluation only. Difix pins old diffusers/
+# transformers, so it gets its own small venv that reuses torch from /opt/venv (a .pth file
+# appends /opt/venv's packages after its own). ~5 GB of weights. --build-arg WITH_DIFIX=0 skips.
+# Skipped automatically if the base image already has /opt/difix.
+ARG WITH_DIFIX=1
+ARG DIFIX_REF=c76edc595586e16732c91ddee82f3a6d83a8a9cc
+RUN if [ "$WITH_DIFIX" = "1" ] && [ ! -x /opt/difix/bin/python ]; then \
+        /opt/venv/bin/python -m venv /opt/difix \
+        && MAIN_SP=$(/opt/venv/bin/python -c "import sysconfig; print(sysconfig.get_paths()['purelib'])") \
+        && DIFIX_SP=$(/opt/difix/bin/python -c "import sysconfig; print(sysconfig.get_paths()['purelib'])") \
+        && echo "$MAIN_SP" > "$DIFIX_SP/zz_main_venv.pth" \
+        && /opt/difix/bin/pip install --no-cache-dir "diffusers==0.25.1" "transformers==4.38.0" \
+            "huggingface-hub==0.25.1" "peft==0.9.0" "tokenizers<0.19" einops \
+        && git clone https://github.com/nv-tlabs/Difix3D.git /tmp/difix \
+        && git -C /tmp/difix checkout ${DIFIX_REF} \
+        && mkdir -p /opt/difix/src \
+        && cp /tmp/difix/src/pipeline_difix.py /tmp/difix/LICENSE.txt /opt/difix/src/ \
+        && rm -rf /tmp/difix \
+        && HF_HUB_OFFLINE=0 /opt/difix/bin/python -c "import sys, torch; sys.path.insert(0, '/opt/difix/src'); from pipeline_difix import DifixPipeline; DifixPipeline.from_pretrained('nvidia/difix_ref', trust_remote_code=True); print('Difix OK, torch', torch.__version__)" \
+        && chmod -R a+rwX "$HF_HOME/hub/models--nvidia--difix_ref" "$HF_HOME/modules" ; \
+    fi
+
+COPY --chown=5001:5001 splat_pipeline.py train_gsplat.py depth_prior.py mapanything_init.py foundry_app.py splat_stream.py selftest.py naming.py scene_fill.py appearance.py difix_fix.py difix_refine.py config.yaml README.md /opt/app/
+
+# Foundry container transforms must run as user 5001. If BASE was built with the default
+# user 5000 (the compute-module setting), switch that user to 5001 here and hand it its folders.
+RUN if [ "$(id -u splat)" != "5001" ]; then \
+        groupmod -g 5001 splat && usermod -u 5001 -g 5001 splat \
+        && chown -R 5001:5001 /opt/app /work /input /output /home/splat ; \
+    fi \
+    && test "$(id -u splat)" = "5001" && echo "user splat is $(id -u splat)"
+USER 5001

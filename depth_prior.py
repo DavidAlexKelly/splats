@@ -27,6 +27,10 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import naming  # noqa: E402
+
 log = logging.getLogger("train")
 
 DEFAULT_MODELS = {
@@ -106,7 +110,10 @@ def align_to_sfm(rel: np.ndarray, u: np.ndarray, v: np.ndarray, z: np.ndarray,
     with np.errstate(divide="ignore", invalid="ignore"):
         depth = 1.0 / m if space == "inverse" else m
     zmin, zmax = np.percentile(z, 1) * 0.3, np.percentile(z, 99) * 4.0
-    depth = np.where(np.isfinite(depth) & (depth > zmin), np.minimum(depth, zmax), 0.0)
+    # Beyond the SfM range the prior is unreliable (and sky has no depth at all): mark it
+    # unknown (0) rather than clamping, so neither the depth loss nor depth seeding drags
+    # sky/background onto a fake wall at zmax.
+    depth = np.where(np.isfinite(depth) & (depth > zmin) & (depth < zmax), depth, 0.0)
     return depth.astype(np.float32), info
 
 
@@ -158,7 +165,10 @@ class _DA2:
         import torch
         from transformers import AutoImageProcessor, AutoModelForDepthEstimation
         name = model or DEFAULT_MODELS["da2"]
-        self.proc = AutoImageProcessor.from_pretrained(name)
+        try:
+            self.proc = AutoImageProcessor.from_pretrained(name)
+        except ImportError:  # fast processor needs torchvision; the slow one only needs Pillow
+            self.proc = AutoImageProcessor.from_pretrained(name, use_fast=False)
         self.m = AutoModelForDepthEstimation.from_pretrained(name).to("cuda").eval()
         self.torch = torch
 
@@ -200,11 +210,11 @@ def frame_observations(fr: dict, points: np.ndarray, scale_x: float, scale_y: fl
 def prepare(ds, data_dir: Path, s: dict, train_idx: list[int]) -> dict:
     """Compute + cache aligned priors and weights for the training images."""
     tag = f"{s['depth_backend']}_{(s['depth_model'] or 'default').replace('/', '_')}_" \
-          f"{s['depth_mode']}_d{s['downscale']}_ws{s['world_scale']}_a{int(bool(s['align']))}"
+          f"{s['depth_mode']}_d{s['downscale']}_ws{s['world_scale']}_a{int(bool(s['align']))}_v2"
     cache = data_dir / "depth_prior" / tag
     cache.mkdir(parents=True, exist_ok=True)
-    todo = [i for i in train_idx if not (cache / f"{Path(ds.frames[i]['name']).stem}.npz").exists()
-            and not (cache / f"{Path(ds.frames[i]['name']).stem}.skip").exists()]
+    todo = [i for i in train_idx if not (cache / f"{naming.flat_key(ds.frames[i]['name'])}.npz").exists()
+            and not (cache / f"{naming.flat_key(ds.frames[i]['name'])}.skip").exists()]
     used = None
     if todo:
         used, model = load_model(s["depth_backend"], s["depth_model"], int(s["depth_process_res"]))
@@ -220,7 +230,7 @@ def prepare(ds, data_dir: Path, s: dict, train_idx: list[int]) -> dict:
                 u, v, z = frame_observations(fr, ds.points, W / fr["src_w"], H / fr["src_h"])
                 depth, info = align_to_sfm(rel, u, v, z, int(s["depth_min_points"]),
                                            float(s["depth_max_rel_error"]))
-                stem = Path(fr["name"]).stem
+                stem = naming.flat_key(fr["name"])
                 if depth is None:
                     (cache / f"{stem}.skip").write_text(json.dumps(info))
                     continue
@@ -236,8 +246,8 @@ def prepare(ds, data_dir: Path, s: dict, train_idx: list[int]) -> dict:
             torch.cuda.empty_cache()
         except Exception:
             pass
-    have = sum((cache / f"{Path(ds.frames[i]['name']).stem}.npz").exists() for i in train_idx)
-    skipped = sum((cache / f"{Path(ds.frames[i]['name']).stem}.skip").exists() for i in train_idx)
+    have = sum((cache / f"{naming.flat_key(ds.frames[i]['name'])}.npz").exists() for i in train_idx)
+    skipped = sum((cache / f"{naming.flat_key(ds.frames[i]['name'])}.skip").exists() for i in train_idx)
     summary = {"cache": str(cache), "with_prior": have, "rejected": skipped,
                "train_images": len(train_idx), "backend_used": used}
     log.info("Depth prior: %d/%d training images supervised (%d rejected for poor SfM fit)",
@@ -251,7 +261,7 @@ def prepare(ds, data_dir: Path, s: dict, train_idx: list[int]) -> dict:
 def load(cache: Path | None, name: str):
     if cache is None:
         return None
-    f = cache / f"{Path(name).stem}.npz"
+    f = cache / f"{naming.flat_key(name)}.npz"
     if not f.exists():
         return None
     z = np.load(f)
@@ -263,7 +273,7 @@ def preview(ds, cache: Path, out_dir: Path, n: int = 6):
     out_dir.mkdir(parents=True, exist_ok=True)
     files = sorted(cache.glob("*.npz"))
     for f in files[:: max(1, len(files) // n)][:n]:
-        fr = next(x for x in ds.frames if Path(x["name"]).stem == f.stem)
+        fr = next(x for x in ds.frames if naming.flat_key(x["name"]) == f.stem)
         img, _ = ds.load(ds.frames.index(fr))
         d, w = load(cache, fr["name"])
         valid = d > 0

@@ -1,7 +1,142 @@
-# Running the splat pipeline as a Foundry compute module
+# Running the splat pipeline on Palantir Foundry
 
-The same code that runs on your PC is packaged into one Docker image. In Foundry it reads
-360 videos from an **input dataset** and writes splats into an **output dataset**:
+There are two ways to run the same Docker image on Foundry:
+
+| | **A. Lightweight transform (recommended)** | B. Compute module |
+|---|---|---|
+| What it is | A normal Foundry build that runs our container on a GPU | A long-running container service |
+| Output | Real files straight into a dataset | Stream records + a rebuild transform (on this enrollment) |
+| Billing | Only while the build runs | Whenever a replica is running, including idle time |
+| Triggering | Build button, schedule, or "when input updates" | Polls the input every 5 minutes |
+| Use it for | Turning videos into splats | An interactive service (e.g. a Workshop button) |
+
+---
+
+## A. Lightweight transform with your own container
+
+```
+360_videos dataset ──► Python transform (our image, T4 GPU) ──► splat_files dataset
+  patio.mp4                                                       patio/patio.ply
+  garden.mp4                                                      patio/patio.json, pipeline.log,
+                                                                  train_stats.json, eval/*.jpg
+                                                                  garden/...
+```
+
+The transform is **incremental**: each build processes only videos added since the last
+successful build and appends their results. A video that fails gets `<name>/FAILED.txt`
+(with the end of its log) instead of a `.ply`; if every video fails, the build fails.
+
+### A1. Ask your admin for
+
+- **Containerised workflows** enabled on the enrollment ("bring your own container").
+- A **GPU resource queue** on the Project (only Projects with one can use GPUs).
+
+### A2. Build and push the image as user 5001
+
+BYOC requires the container user to be exactly 5001:
+
+```
+docker build --platform linux/amd64 --build-arg MAX_JOBS=4 --build-arg APP_UID=5001 -t splat-pipeline:0.2.1 .
+set REPOSITORY=<your Artifacts repository rid>
+set TOKEN=<fresh token>
+echo %TOKEN%| docker login -u %REPOSITORY% --password-stdin <your container registry host>
+docker tag splat-pipeline:0.2.1 <your container registry host>/splat:0.2.1
+docker push <your container registry host>/splat:0.2.1
+```
+
+**Small changes later (minutes, not hours):** for code/config edits, or adding a missing
+system tool, layer them on the image you already have instead of a full rebuild:
+
+```
+docker build --platform linux/amd64 -f Dockerfile.quick --build-arg BASE=splat-pipeline:0.2.1 -t splat-pipeline:0.2.2 .
+```
+
+Then tag/push `0.2.2` and set `IMAGE_TAG = "0.2.2"` in the transform. Use the full Dockerfile
+only when dependencies change. The image must contain `curl` (Foundry's launcher uses it);
+both Dockerfiles install it.
+
+Foundry also requires each image layer to be under about 10 GB. If the push or the build is
+rejected for layer size, build with `--build-arg WITH_MAPANYTHING=0`.
+
+### A2b. Self-test the image on your PC before pushing (strongly recommended)
+
+`selftest.py` checks every stage in a few minutes: tools, GPU + gsplat, the depth model,
+MapAnything (if used), then a tiny end-to-end run of the real pipeline on a synthetic 360
+video of a textured room. Run it on your own GPU before every push:
+
+```
+docker run --rm --gpus all splat-pipeline:0.2.1 python /opt/app/selftest.py
+```
+
+It ends with a summary and `ALL CHECKS PASSED`, or names the failing check and what to do.
+`--quick` skips the end-to-end run. The transform also runs it on Foundry before touching any
+video (`SELFTEST = True`, about 3-5 min on a T4); `SELFTEST_ONLY = True` runs just the test
+with no videos and writes `_selftest/report.txt` to the output dataset.
+
+### A3. Datasets (same Project as the repository)
+
+- `360_videos`: upload the DJI exports as raw files (don't apply a schema).
+- `splat_files`: leave it to be created by the first build, or create an empty one.
+
+### A4. The Python Transforms repository
+
+1. Create a **Pipelines → Python Transforms** repository in the same Project.
+2. In the repository settings, add your **Artifacts repository** as a **backing
+   repository**, so the transform can find the image.
+3. Copy `foundry_transform/splat_transform.py` into `src/<your package>/` (next to the
+   example transform the template created) and fill in the CONFIG block at the top:
+   dataset paths, image name and tag, and optional `CONFIG_OVERRIDES`.
+4. Commit, open the `splat_files` output and press **Build**. (Preview doesn't work for
+   container transforms; only full builds do.)
+
+The build log shows the whole pipeline live, prefixed with `| `: the GPU check, each
+stage, training progress and the uploads.
+
+If you get "`function object has no attribute using`", the repository's transforms
+library is too old: upgrade the repository (the docs' repository upgrade guide), or ask
+me for the legacy `@lightweight` syntax.
+
+### A5. Settings
+
+Edit `CONFIG_OVERRIDES` in the transform, for example:
+
+```python
+CONFIG_OVERRIDES = {"sfm": {"mapper": "mapanything",
+                            "mapanything": {"settings": {"window_frames": 24}}}}
+```
+
+Resources are set at the top too (`CPU_CORES`, `MEMORY_GB`, `GPU_TYPE`). The defaults
+(8 cores, 32 GB, `NVIDIA_T4`) suit a T4. 8 cores and 64 GB are the default upper limits.
+
+**Unknowns to check on the first run:** local disk space inside the build container (an
+8K video needs tens of GB of temporary space) and any maximum build duration. Start with a
+10-15 second clip.
+
+### A6. Difix fill-in transform (optional)
+
+`foundry_transform/difix_transform.py` is a second transform in the same repository, same
+image, same T4. It refines splats the main transform already made; it doesn't touch them.
+
+1. Create an empty dataset (e.g. `splat_files_difix`) and put its RID in `DIFIX_DATASET`.
+2. Results to refine need a `scene/` folder. Results from before that update don't have one:
+   bump `RERUN` in `splat_transform.py` once to make a new version of them.
+3. `TARGETS = ["latest"]` refines the newest version of every video; or name folders,
+   e.g. `["patio_v4"]`. Build the output dataset.
+
+Takes about 30-60 min per scene on a T4 (3 rounds x 200 views). `DIFIX_OVERRIDES =
+{"difix": {"rounds": 2, "views_per_round": 120}}` is a quicker first look. Each target gets
+`<folder>_difix/` (`_difix_v2`, ... on re-runs); a failed one gets `FAILED.txt` and is tried
+again next build. Licence: non-commercial research/evaluation only (see README).
+
+The image needs the Difix environment: the full `Dockerfile` and `Dockerfile.quick` both add it
+by default (about 5 GB more, downloaded once at build time).
+
+---
+
+## B. Compute module
+
+The same image also runs as a compute module. In Foundry it reads 360 videos from an
+**input dataset** and writes splats out:
 
 ```
 input dataset "videos"                 output dataset "splats"
@@ -22,6 +157,7 @@ Files in the image:
 | File | Purpose |
 |---|---|
 | `Dockerfile` | Builds the image: CUDA 12.6, ffmpeg, COLMAP (CUDA), PyTorch 2.8, gsplat (prebuilt) |
+| `Dockerfile.quick` | Fast rebuild: layers code/config changes and tool fixes on an existing image |
 | `foundry_app.py` | Entrypoint: `pipeline`, `function` or `local` mode |
 | `requirements-container.txt` | Python packages for the image |
 | `.dockerignore` | Keeps work folders and videos out of the image |
@@ -29,16 +165,17 @@ Files in the image:
 
 ---
 
-## 0. Check with your Foundry admin first
+### B0. Check with your Foundry admin first
 
 - **Compute modules** must be enabled for your enrollment, and you need a **GPU** option
-  (L4 or A10G with 24 GB is the sweet spot; T4 16 GB works with a smaller `cap_max`).
+  (a T4 with 16 GB is enough: it's the same GPU generation as the RTX 2080 the pipeline was
+  tested on, with twice the memory; L4/A10G are faster).
 - GPU time costs compute-seconds. One 60 s patio clip is roughly 3 to 5 hours of a GPU replica.
 - If this is a work enrollment, confirm it's an approved use before uploading personal footage.
 
 ---
 
-## 1. Build the image
+### B1. Build the image
 
 You need Docker (on Windows: **Docker Desktop** with the WSL 2 backend). From the `splats` folder:
 
@@ -62,7 +199,7 @@ The build ends by printing `gsplat 1.5.3 prebuilt kernels: True`.
 **Never tag it `latest`**: Foundry requires a specific tag. Bump the tag (0.1.1, 0.1.2...)
 each time you push a change.
 
-## 2. (Recommended) Test the exact image on your own GPU
+### B2. (Recommended) Test the exact image on your own GPU
 
 This catches problems before you spend Foundry GPU time. Docker Desktop's GPU support needs a
 current NVIDIA driver (you have one). From the `splats` folder:
@@ -77,7 +214,7 @@ Look for `gpu check: OK: rendered and back-propagated...` in the first lines. Fo
 smoke test, put a short clip (10–15 s) in a separate folder and mount that as `/input`.
 Results appear in `test_out\<name>\`.
 
-## 3. Create the datasets
+### B3. Create the datasets
 
 In a Foundry **Project** (the module and both datasets must be in the same Project):
 
@@ -86,7 +223,7 @@ In a Foundry **Project** (the module and both datasets must be in the same Proje
    several GB, so the upload takes a while.
 2. Create an empty dataset for results, e.g. `splats`.
 
-## 4. Create the compute module
+### B4. Create the compute module
 
 1. In the Project: **+ New → Compute Module**, choose a **pipeline** module.
 2. Follow the module's container/image instructions to push your image to its Artifacts
@@ -99,7 +236,7 @@ In a Foundry **Project** (the module and both datasets must be in the same Proje
    hostname (e.g. `yourenrollment.palantirfoundry.com`). Foundry's docs require this for
    the container to call Foundry's APIs, even in pipeline mode.
 5. **Resources** (per replica):
-   - GPU: 1 × L4 or A10G (24 GB). T4: set `cap_max` to 2000000 (see below).
+   - GPU: 1 × T4 (16 GB) works with the defaults; L4/A10G (24 GB) are faster.
    - CPU: 8 or more (COLMAP's mapper is CPU-heavy).
    - Memory: 32 GB or more.
    - Storage: mount a volume at **`/work`** with at least **60 GB**. Each 8K video needs
@@ -118,7 +255,7 @@ In a Foundry **Project** (the module and both datasets must be in the same Proje
 | `SPLAT_MODE` | `auto` (default: detects pipeline vs function mode) |
 | `SPLAT_STREAM_CHUNK_KB` | optional, default `512` |
 
-## 4b. Stream output (when pipeline mode only allows stream outputs)
+### B4b. Stream output (when pipeline mode only allows stream outputs)
 
 This is the default (`SPLAT_OUTPUT_KIND=stream`). Each result file is split into chunks and
 sent as text records; a Python transform then rebuilds the real files into a dataset.
@@ -177,7 +314,7 @@ and run locally:
 python splat_stream.py rebuild exported_records.parquet rebuilt_files
 ```
 
-## 5. Run it and watch
+### B5. Run it and watch
 
 Start the module and open its **logs**. A healthy run looks like:
 
@@ -197,7 +334,7 @@ patio: ok, published 12 files
 Then open the `splats` dataset, download `patio/patio.ply` and drag it into SuperSplat.
 Look at `patio/eval/*.jpg` to see photo-vs-splat comparisons.
 
-## 6. Settings you'll likely change
+### B6. Settings you'll likely change
 
 Everything in `config.yaml` can be overridden per deployment with `SPLAT_CONFIG_OVERRIDES`
 (JSON, merged over the file), without rebuilding the image:
@@ -205,13 +342,13 @@ Everything in `config.yaml` can be overridden per deployment with `SPLAT_CONFIG_
 | Goal | Override |
 |---|---|
 | More detail on a 24–80 GB GPU | `{"train":{"custom":{"cap_max":5000000}}}` |
-| Smaller GPU (T4) | `{"train":{"custom":{"cap_max":2000000}}}` |
+| T4, hybrid mapper | `{"sfm":{"mapper":"mapanything","mapanything":{"settings":{"window_frames":24}}}}` |
 | Real-world scale | `{"train":{"custom":{"world_scale":0.25}}}` |
 | Faster SfM (try once stable) | `{"sfm":{"mapper":"colmap_global"}}` |
 | Metric + faster SfM (MapAnything + COLMAP hybrid) | `{"sfm":{"mapper":"mapanything","mapanything":{"settings":{"window_frames":64}}}}` |
 | Longer training | `{"train":{"iterations":40000}}` |
 
-## 7. Alternative: function mode (trigger runs from Workshop / code)
+### B7. Alternative: function mode (trigger runs from Workshop / code)
 
 Choose a **Functions** module (the image detects function mode automatically; `SPLAT_MODE=function` forces it) with **Application
 permissions** (not available on every enrollment). Give the module's service user read
@@ -241,7 +378,7 @@ be datasets, streams or media sets, so first check the output picker for a resou
 option and that the datasets are in the *same Project* as the module. If datasets still
 aren't offered, use function mode.
 
-## 8. Troubleshooting
+### B8. Troubleshooting
 
 | Symptom in the logs | Fix |
 |---|---|

@@ -1,0 +1,42 @@
+# Rented-GPU image (RunPod, Vast.ai, any Linux box): the pipeline image plus SSH, a
+# one-command runner (pod_run.py) and the /workspace folder layout. Runs as root, as pod
+# platforms expect. Builds in a minute or two on top of the base image, so use it for every
+# code change too (pod/update_pod.cmd); only rebuild the base when dependencies change.
+#
+#   docker build --platform linux/amd64 -f Dockerfile.pod --build-arg BASE=splat-5090-base:1.0.0 -t <you>/splat-pod:1.0.0 .
+#
+# pod/build_5090.cmd (Windows) / pod/build_5090.sh do both builds and the push.
+ARG BASE=splat-5090-base:1.0.0
+FROM ${BASE}
+
+USER root
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        openssh-server rsync tmux nano htop less wget curl ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && mkdir -p /var/run/sshd /root/.ssh && chmod 700 /root/.ssh
+
+# Optional helpers so pod_run.py --stop-when-done can stop the machine it runs on. Not fatal
+# if a download fails: you can always stop the pod on the website.
+RUN (wget -qO /usr/local/bin/runpodctl \
+        https://github.com/runpod/runpodctl/releases/latest/download/runpodctl-linux-amd64 \
+     && chmod +x /usr/local/bin/runpodctl && runpodctl version) \
+    || (rm -f /usr/local/bin/runpodctl; echo "runpodctl not installed (optional)")
+RUN (python3 -m venv /opt/vastcli && /opt/vastcli/bin/pip install --no-cache-dir vastai \
+     && ln -s /opt/vastcli/bin/vastai /usr/local/bin/vastai) \
+    || echo "vastai CLI not installed (optional)"
+
+COPY splat_pipeline.py train_gsplat.py depth_prior.py mapanything_init.py foundry_app.py splat_stream.py selftest.py naming.py scene_fill.py appearance.py difix_fix.py difix_refine.py pod_run.py config.yaml README.md /opt/app/
+COPY pod/start.sh /opt/app/pod/start.sh
+RUN chmod +x /opt/app/pod/start.sh /opt/app/pod_run.py \
+    && ln -sf /opt/app/pod_run.py /usr/local/bin/splat \
+    && sed -i '1s|.*|#!/opt/venv/bin/python|' /opt/app/pod_run.py \
+    && python -c "import ast; ast.parse(open('/opt/app/pod_run.py').read())"
+
+ENV HOME=/root \
+    TORCH_EXTENSIONS_DIR=/root/.cache/torch_extensions \
+    SPLAT_VIDEOS=/workspace/videos \
+    SPLAT_RESULTS=/workspace/splats \
+    SPLAT_WORK=/workspace/work \
+    SPLAT_MODE=local
+WORKDIR /workspace
+CMD ["/opt/app/pod/start.sh"]

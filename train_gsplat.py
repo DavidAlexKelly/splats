@@ -26,7 +26,6 @@ import math
 import os
 import queue
 import random
-import re
 import sys
 import threading
 import time
@@ -37,7 +36,10 @@ import numpy as np
 import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import appearance  # noqa: E402
 import depth_prior  # noqa: E402
+import naming  # noqa: E402
+import scene_fill  # noqa: E402
 
 log = logging.getLogger("train")
 
@@ -65,6 +67,12 @@ DEFAULTS = {
     "exposure": True,            # learn a colour/exposure correction per photo
     "exposure_lr": 1e-3,
     "exposure_reg": 1e-2,        # keeps corrections small so true colours stay in the splat
+    "bilagrid": True,            # per-photo bilateral grid: local exposure/tone/tint correction
+    "bilagrid_xy": 16,           # grid cells across the image
+    "bilagrid_luma": 8,          # grid cells along brightness
+    "bilagrid_lr": 2e-3,
+    "bilagrid_tv": 10.0,         # smoothness: the grids may only make gentle, broad changes
+    "antialiased": True,         # Mip-Splatting style anti-aliasing: less shimmer off the path
     "test_every": 20,            # hold out every Nth image for an honest score (0 = off)
     "eval_every": 5000,
     # Monocular depth prior (see depth_prior.py)
@@ -80,6 +88,21 @@ DEFAULTS = {
     "depth_grad_weight": 1.0,    # depth-gradient (shape) term relative to the disparity term
     "depth_min_points": 30,      # SfM points an image needs for its prior to be aligned
     "depth_max_rel_error": 0.35, # reject priors whose alignment error exceeds this
+    # Filling gaps from real data (see scene_fill.py)
+    "depth_seed": True,          # extra starting Gaussians from the depth prior in thin areas
+    "depth_seed_max_points": 300_000,
+    "depth_seed_min_weight": 0.5,  # only where the prior's coverage weight says SfM is sparse
+    "depth_seed_stride": 8,      # sample every Nth pixel
+    "depth_seed_voxel": 0.004,   # merge seeds closer than this x scene scale
+    "sky_shell": True,           # sphere of Gaussians far away for sky / distant background
+    "sky_points": 100_000,
+    "sky_radius_mult": 3.0,      # shell radius = this x the scene's extent
+    "prune": True,               # floater cleanup before export (checkpoint keeps everything)
+    "prune_min_opacity": 0.005,  # MCMC keeps many faint Gaussians that matter together
+    "prune_max_psnr_drop": 0.05, # undo/lighten the cleanup if held-out PSNR drops more
+    "prune_near_camera": 0.02,   # remove Gaussians closer than this x scene scale to a camera
+    "prune_max_scale": 1.0,      # remove blobs larger than this x scene scale (not the sky)
+    "prune_outlier_std": 3.0,    # remove isolated specks (0 = off)
 }
 
 SH_C0 = 0.28209479177387814
@@ -96,9 +119,10 @@ def load_settings(config_path: str | None, overrides: dict) -> dict:
         if "iterations" in train:
             s["iterations"] = train["iterations"]
         s.update(train.get("custom", {}) or {})
-        views = (cfg.get("slice", {}) or {}).get("views")
-        if views:
-            s["_views"] = views
+        try:
+            s["_views"] = naming.resolve_views(cfg.get("slice", {}) or {})
+        except ValueError:
+            pass
     s.update({k: v for k, v in overrides.items() if v is not None})
     return s
 
@@ -168,14 +192,7 @@ def read_points_txt(path: Path, with_ids: bool = False):
 # --------------------------------------------------------------------------- #
 # Gravity alignment
 # --------------------------------------------------------------------------- #
-def rig_from_cam(yaw_deg: float, pitch_deg: float) -> np.ndarray:
-    """Rotation taking camera-frame rays to the level 360 rig frame. Must match
-    build_view_maps() in splat_pipeline.py: pitch about x first, then yaw about y.
-    Frames use x right, y down, z forward."""
-    p, t = math.radians(pitch_deg), math.radians(yaw_deg)
-    Rx = np.array([[1, 0, 0], [0, math.cos(p), -math.sin(p)], [0, math.sin(p), math.cos(p)]])
-    Ry = np.array([[math.cos(t), 0, math.sin(t)], [0, 1, 0], [-math.sin(t), 0, math.cos(t)]])
-    return Ry @ Rx
+rig_from_cam = naming.rig_from_cam  # camera rays -> level 360 frame (shared with the slicer)
 
 
 TARGET_AXES = {  # (up, back) in the output world; forward = -back
@@ -192,10 +209,10 @@ def compute_alignment(images: list[dict], views: list, up_axis: str, scale: floa
     ups, fwds, centers = [], [], []
     first_frame = None
     for im in sorted(images, key=lambda d: d["name"]):
-        m = re.search(r"^(.*)_v(\d+)\.", im["name"])
-        if not m or int(m.group(2)) >= len(views):
+        parsed = naming.parse(im["name"])
+        if not parsed or parsed[1] >= len(views):
             continue
-        frame, vi = m.group(1), int(m.group(2))
+        frame, vi = parsed
         R_rc = rig_from_cam(*views[vi][:2])
         world_from_cam = im["R"].T
         ups.append(world_from_cam @ R_rc.T @ up_rig)
@@ -205,7 +222,7 @@ def compute_alignment(images: list[dict], views: list, up_axis: str, scale: floa
             fwds.append(world_from_cam @ R_rc.T @ fwd_rig)
         centers.append(-im["R"].T @ im["t"])
     if len(ups) < 10:
-        return None, {"error": "too few images with _vNN names to align"}
+        return None, {"error": "too few images with view names (vNN/...) to align"}
     ups = np.array(ups)
     u = ups.mean(0)
     u /= np.linalg.norm(u)
@@ -432,9 +449,9 @@ def make_ssim(torch, F, device):
 
 
 def frame_view(name: str):
-    """'f00012_v03.jpg' -> (12, 3); None if the name doesn't follow the pattern."""
-    m = re.search(r"(\d+)_v(\d+)\.", name)
-    return (int(m.group(1)), int(m.group(2))) if m else None
+    """'v03/f00012.jpg' (or legacy 'f00012_v03.jpg') -> (12, 3); None otherwise."""
+    parsed = naming.parse(name)
+    return (naming.frame_number(parsed[0]), parsed[1]) if parsed else None
 
 
 def split_train_test(ds: "ColmapDataset", test_every: int):
@@ -521,7 +538,16 @@ def train(data_dir: Path, out_dir: Path, s: dict):
 
     train_idx, test_idx, expo_src = split_train_test(ds, int(s["test_every"]))
     use_depth = bool(s["depth_prior"])
-    depth_summary = depth_prior.prepare(ds, data_dir, s, train_idx) if use_depth else None
+    depth_summary = None
+    if use_depth:
+        try:
+            depth_summary = depth_prior.prepare(ds, data_dir, s, train_idx)
+        except Exception as e:  # the prior is an optional extra: never lose a run over it
+            log.warning("Depth prior unavailable, training without it.\n%s: %s",
+                        type(e).__name__, e)
+            use_depth, ds.prior_dir = False, None
+            s = dict(s, depth_prior=False)
+            depth_summary = {"enabled": False, "error": f"{type(e).__name__}: {e}"}
     log.info("Dataset: %d images (%dx%d) -> %d train / %d held out, %d SfM points, "
              "scene scale %.3f", len(ds), ds.frames[0]["W"], ds.frames[0]["H"],
              len(train_idx), len(test_idx), len(ds.points), ds.scene_scale)
@@ -547,7 +573,8 @@ def train(data_dir: Path, out_dir: Path, s: dict):
     else:
         raise ValueError(f"Unknown strategy {s['strategy']}")
 
-    compat_keys = ("align", "up_axis", "world_scale", "exposure", "test_every", "depth_prior")
+    compat_keys = ("align", "up_axis", "world_scale", "exposure", "test_every", "depth_prior",
+                   "bilagrid", "antialiased")
     ckpt_path = out_dir / "ckpt.pt"
     start, ckpt = 0, None
     if ckpt_path.exists():
@@ -561,29 +588,67 @@ def train(data_dir: Path, out_dir: Path, s: dict):
             log.info("Checkpoint is from different data or settings; starting fresh")
             ckpt = None
 
+    fill_info: dict = {}
+    sky_geom = None  # (centre, radius) of the sky shell, for pruning
     if ckpt is not None:
         splats = torch.nn.ParameterDict(
             {k: torch.nn.Parameter(v) for k, v in ckpt["splats"].items()}).to(device)
         start = ckpt["step"] + 1
+        sky_geom = ckpt.get("sky_geom")
+        fill_info = ckpt.get("fill_info", {})
         log.info("Resuming from step %d (%d Gaussians)", start, len(splats["means"]))
     else:
-        pts, cols = ds.points, ds.colors
-        if mcmc and len(pts) > s["cap_max"]:
-            sel = np.random.choice(len(pts), int(s["cap_max"]), replace=False)
-            pts, cols = pts[sel], cols[sel]
-        n = len(pts)
-        dist = knn_scale(pts) * init_scale
+        rng = np.random.default_rng(int(s["seed"]))
+        pts, cols = ds.points.astype(np.float32), ds.colors.astype(np.float32)
+        seed_pts, seed_cols = np.zeros((0, 3), np.float32), np.zeros((0, 3), np.float32)
+        if s["depth_seed"] and use_depth:
+            seed_pts, seed_cols, fill_info["depth_seed"] = scene_fill.depth_seed_points(
+                ds, train_idx, s, rng)
+        sky = None
+        if s["sky_shell"] and not mcmc:
+            log.info("Sky shell skipped: it needs strategy mcmc (the default strategy would "
+                     "prune the large distant Gaussians)")
+        elif s["sky_shell"] and int(s["sky_points"]) > 0:
+            n_req = min(int(s["sky_points"]), int(0.1 * int(s["cap_max"])))  # <=10% of budget
+            *sky, centre, radius, fill_info["sky_shell"] = scene_fill.sky_shell_points(
+                ds, train_idx, dict(s, sky_points=n_req), rng)
+            sky_geom = (np.asarray(centre, np.float64), float(radius))
+        n_sky = len(sky[0]) if sky else 0
+        if mcmc:  # the initial set must fit the Gaussian budget
+            room = max(1000, int(s["cap_max"]) - n_sky)
+            if len(pts) + len(seed_pts) > room:
+                frac = room / (len(pts) + len(seed_pts))
+                if len(pts):
+                    sel = rng.choice(len(pts), max(1, int(len(pts) * frac)), replace=False)
+                    pts, cols = pts[sel], cols[sel]
+                if len(seed_pts):
+                    sel = rng.choice(len(seed_pts), int(len(seed_pts) * frac), replace=False)
+                    seed_pts, seed_cols = seed_pts[sel], seed_cols[sel]
+        body = np.concatenate([pts, seed_pts])
+        body_cols = np.concatenate([cols, seed_cols])
+        dist = knn_scale(body) * init_scale
+        opa = np.full(len(body), init_opa, np.float32)
+        all_pts, all_cols = body, body_cols
+        if sky:
+            sky_pts, sky_cols, sky_spacing = sky
+            all_pts = np.concatenate([body, sky_pts])
+            all_cols = np.concatenate([body_cols, sky_cols])
+            dist = np.concatenate([dist, sky_spacing * 0.6])  # neighbours overlap: no gaps
+            opa = np.concatenate([opa, np.full(n_sky, 0.8, np.float32)])
+        n = len(all_pts)
         colors = torch.zeros((n, n_sh, 3))
-        colors[:, 0, :] = (torch.from_numpy(cols) - 0.5) / SH_C0
+        colors[:, 0, :] = (torch.from_numpy(all_cols.astype(np.float32)) - 0.5) / SH_C0
         splats = torch.nn.ParameterDict({
-            "means": torch.nn.Parameter(torch.from_numpy(pts)),
-            "scales": torch.nn.Parameter(torch.log(torch.from_numpy(dist).float())[:, None].repeat(1, 3)),
+            "means": torch.nn.Parameter(torch.from_numpy(all_pts.astype(np.float32))),
+            "scales": torch.nn.Parameter(
+                torch.log(torch.from_numpy(dist).float())[:, None].repeat(1, 3)),
             "quats": torch.nn.Parameter(torch.rand((n, 4))),
-            "opacities": torch.nn.Parameter(torch.logit(torch.full((n,), init_opa))),
+            "opacities": torch.nn.Parameter(torch.logit(torch.from_numpy(opa))),
             "sh0": torch.nn.Parameter(colors[:, :1, :].contiguous()),
             "shN": torch.nn.Parameter(colors[:, 1:, :].contiguous()),
         }).to(device)
-        log.info("Initialised %d Gaussians from SfM points", n)
+        log.info("Initialised %d Gaussians: %d from SfM points, %d depth seeds, %d sky shell",
+                 n, len(pts), len(seed_pts), n_sky)
 
     optimizers = make_optimizers(splats)
     scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizers["means"], gamma=0.01 ** (1.0 / iters))
@@ -600,6 +665,11 @@ def train(data_dir: Path, out_dir: Path, s: dict):
     expo = torch.nn.Parameter(torch.zeros(len(ds), 3, 4, device=device))
     expo_opt = torch.optim.Adam([expo], lr=float(s["exposure_lr"]), eps=1e-15)
     eye3 = torch.eye(3, device=device)
+    bil, bil_opt = appearance.make(len(ds), s, device)
+    train_idx_t = torch.tensor(train_idx, device=device)
+    if bil is not None:
+        log.info("Per-photo bilateral grids on (%dx%dx%d)", int(s["bilagrid_xy"]),
+                 int(s["bilagrid_xy"]), int(s["bilagrid_luma"]))
 
     if ckpt is not None:
         for k, o in optimizers.items():
@@ -610,13 +680,20 @@ def train(data_dir: Path, out_dir: Path, s: dict):
             with torch.no_grad():
                 expo.copy_(ckpt["expo"])
             expo_opt.load_state_dict(ckpt["expo_opt"])
+        if bil is not None and "bilagrid" in ckpt:
+            bil.load_state_dict(ckpt["bilagrid"])
+            bil_opt.load_state_dict(ckpt["bilagrid_opt"])
         del ckpt
 
-    def apply_expo(img, i):  # img [1,H,W,3]
-        if not use_expo or i is None:
+    def apply_expo(img, i):  # img [1,H,W,3]: the photo-specific look (not exported)
+        if i is None:
             return img
-        d = expo[i]
-        return img @ (eye3 + d[:, :3]).T + d[:, 3]
+        if use_expo:
+            d = expo[i]
+            img = img @ (eye3 + d[:, :3]).T + d[:, 3]
+        if bil is not None:
+            img = bil(img, i)
+        return img
 
     ssim = make_ssim(torch, F, device)
     absgrad = bool(getattr(strategy, "absgrad", False))
@@ -632,13 +709,15 @@ def train(data_dir: Path, out_dir: Path, s: dict):
             viewmats=torch.from_numpy(fr["viewmat"]).to(device)[None],
             Ks=torch.from_numpy(fr["K"]).to(device)[None],
             width=fr["W"], height=fr["H"], sh_degree=sh_deg,
-            near_plane=float(s["near_plane"]), packed=packed, absgrad=absgrad)
+            near_plane=float(s["near_plane"]), packed=packed, absgrad=absgrad,
+            rasterize_mode="antialiased" if s["antialiased"] else "classic")
 
     eval_dir = out_dir / "eval"
     eval_history = []
 
     @torch.no_grad()
-    def evaluate(step, save_images):
+    def evaluate(step, save_images, raw=False):
+        """Held-out PSNR. raw=True skips the per-photo corrections: what a viewer shows."""
         if not test_idx:
             return None
         if save_images:
@@ -649,15 +728,18 @@ def train(data_dir: Path, out_dir: Path, s: dict):
             img, _ = ds.load(i)
             gt = torch.from_numpy(img).to(device).float().div_(255.0)[None]
             out, _, _ = render(ds.frames[i], sh_degree)
-            out = apply_expo(out[..., :3], expo_src.get(i)).clamp(0, 1)
+            out = (out[..., :3] if raw else apply_expo(out[..., :3], expo_src.get(i))).clamp(0, 1)
             mse = F.mse_loss(out, gt).item()
             psnrs.append(-10 * math.log10(max(mse, 1e-10)))
             if save_images and i in pick:
                 pair = torch.cat([gt[0], out[0]], dim=1).mul(255).byte().cpu().numpy()
-                name = Path(ds.frames[i]["name"]).stem
+                name = naming.flat_key(ds.frames[i]["name"])
                 cv2.imwrite(str(eval_dir / f"{name}_photo_vs_splat.jpg"),
                             cv2.cvtColor(pair, cv2.COLOR_RGB2BGR), [cv2.IMWRITE_JPEG_QUALITY, 92])
         val = float(np.mean(psnrs))
+        if raw:
+            log.info("EVAL step %d: held-out PSNR %.2f without per-photo corrections", step, val)
+            return val
         eval_history.append({"step": step, "psnr": round(val, 3)})
         log.info("EVAL step %d: held-out PSNR %.2f over %d unseen images", step, val, len(psnrs))
         return val
@@ -669,6 +751,9 @@ def train(data_dir: Path, out_dir: Path, s: dict):
                     "optimizers": {k: o.state_dict() for k, o in optimizers.items()},
                     "scheduler": scheduler.state_dict(), "strategy_state": state,
                     "expo": expo.detach(), "expo_opt": expo_opt.state_dict(),
+                    **({"bilagrid": bil.state_dict(), "bilagrid_opt": bil_opt.state_dict()}
+                       if bil is not None else {}),
+                    "sky_geom": sky_geom, "fill_info": fill_info,
                     "settings": {k: v for k, v in s.items() if not k.startswith("_")}}, tmp)
         tmp.replace(ckpt_path)
 
@@ -706,6 +791,8 @@ def train(data_dir: Path, out_dir: Path, s: dict):
                 loss = loss + s["scale_reg"] * torch.exp(splats["scales"]).abs().mean()
             if use_expo:
                 loss = loss + float(s["exposure_reg"]) * expo[i].pow(2).mean()
+            if bil is not None:
+                loss = loss + float(s["bilagrid_tv"]) * bil.tv_loss(i)
             if want_depth:
                 frac = step / max(iters - 1, 1)
                 lam_d = float(s["depth_weight"]) * (1 - frac * (1 - float(s["depth_end_ratio"])))
@@ -729,6 +816,13 @@ def train(data_dir: Path, out_dir: Path, s: dict):
             if use_expo:
                 expo_opt.step()
                 expo_opt.zero_grad(set_to_none=True)
+            if bil is not None:
+                bil_opt.step()
+                bil_opt.zero_grad(set_to_none=True)
+                bil.recenter_(train_idx_t)
+            if use_expo:  # same for the global corrections: average = no change
+                with torch.no_grad():
+                    expo[train_idx_t] -= expo[train_idx_t].mean(0, keepdim=True)
             scheduler.step()
             if mcmc:
                 strategy.step_post_backward(params=splats, optimizers=optimizers, state=state,
@@ -764,8 +858,40 @@ def train(data_dir: Path, out_dir: Path, s: dict):
     finally:
         loader.close()
 
-    save_ckpt(iters - 1)
-    final_eval = evaluate(iters, save_images=True)
+    save_ckpt(iters - 1)  # the checkpoint keeps every Gaussian; the export is cleaned
+    if s["prune"]:
+        # Cleanup must never cost quality: score before, try full then light cleanup, and
+        # keep the first that stays within prune_max_psnr_drop of the unpruned score.
+        with torch.no_grad():
+            base = evaluate(iters, save_images=False)
+            original = {k: v.detach().clone() for k, v in splats.items()}
+            tol = float(s["prune_max_psnr_drop"])
+            fill_info["prune"] = {"before_psnr": base, "applied": "none"}
+            for level in ("full", "light"):
+                keep, counts = scene_fill.prune_mask(
+                    original["means"].cpu().numpy(), original["opacities"].cpu().numpy(),
+                    original["scales"].cpu().numpy(),
+                    np.array([f["center"] for f in ds.frames]), ds.scene_scale, s,
+                    *(sky_geom if sky_geom else (None, None)), level=level)
+                if counts["removed"] == 0:
+                    continue
+                keep_t = torch.from_numpy(keep).to(device)
+                for k in list(splats.keys()):
+                    splats[k] = torch.nn.Parameter(original[k][keep_t])
+                score = evaluate(iters, save_images=False)
+                if base is None or score is None or score >= base - tol:
+                    fill_info["prune"] = {**counts, "level": level, "before_psnr": base,
+                                          "after_psnr": score, "applied": level}
+                    log.info("Floater cleanup kept (%s): held-out PSNR %.2f -> %.2f",
+                             level, base or 0, score or 0)
+                    break
+                log.info("Floater cleanup (%s) undone: held-out PSNR fell %.2f -> %.2f",
+                         level, base, score)
+                for k in list(splats.keys()):
+                    splats[k] = torch.nn.Parameter(original[k].clone())
+            del original
+    final_eval = evaluate(iters, save_images=True)  # scored on what is exported
+    raw_eval = evaluate(iters, save_images=False, raw=True)
     with torch.no_grad():
         kept, dropped = write_ply(
             out_dir / "splat.ply",
@@ -777,8 +903,10 @@ def train(data_dir: Path, out_dir: Path, s: dict):
              "peak_vram_gb": round(torch.cuda.max_memory_allocated() / 1e9, 2),
              "images_train": len(train_idx), "images_heldout": len(test_idx),
              "heldout_psnr": round(final_eval, 3) if final_eval is not None else None,
+             "heldout_psnr_raw": round(raw_eval, 3) if raw_eval is not None else None,
              "eval_history": eval_history,
              "depth_prior": depth_summary,
+             "fill": fill_info,
              "settings": {k: v for k, v in s.items() if not k.startswith("_")}}
     (out_dir / "train_stats.json").write_text(json.dumps(stats, indent=2))
     log.info("Wrote %s (%d Gaussians)", out_dir / "splat.ply", kept)
@@ -809,11 +937,11 @@ def inspect(data_dir: Path, s: dict):
 
     frames: dict[str, list] = {}
     for im in images:
-        m = re.search(r"^(.*)_v(\d+)\.", im["name"])
-        if not m or int(m.group(2)) >= len(views):
+        parsed = naming.parse(im["name"])
+        if not parsed or parsed[1] >= len(views):
             continue
-        world_from_rig = im["R"].T @ rig_from_cam(*views[int(m.group(2))][:2]).T
-        frames.setdefault(m.group(1), []).append((int(m.group(2)), -im["R"].T @ im["t"], world_from_rig))
+        world_from_rig = im["R"].T @ rig_from_cam(*views[parsed[1]][:2]).T
+        frames.setdefault(parsed[0], []).append((parsed[1], -im["R"].T @ im["t"], world_from_rig))
 
     centers_all = np.array([c for f in frames.values() for _, c, _ in f])
     scene = float(np.median(np.linalg.norm(centers_all - centers_all.mean(0), axis=1))) or 1.0
@@ -888,7 +1016,7 @@ def self_check():
         opacities=torch.full((n,), 0.8, device=dev), colors=torch.rand(n, 3, device=dev),
         viewmats=torch.eye(4, device=dev)[None],
         Ks=torch.tensor([[[100.0, 0, 64], [0, 100.0, 64], [0, 0, 1]]], device=dev),
-        width=128, height=128)
+        width=128, height=128, rasterize_mode="antialiased")
     out.mean().backward()
     assert means.grad is not None and torch.isfinite(means.grad).all()
     log.info("OK: rendered and back-propagated through gsplat on the GPU")

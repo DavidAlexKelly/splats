@@ -5,8 +5,11 @@ splat_pipeline.py - 360 degree equirectangular video -> Gaussian splat (.ply)
 Stages (each one is resumable):
     extract  ffmpeg pulls frames from the video at extract.fps
     select   keeps the sharpest frame in each window -> select.target_fps
-    slice    equirect frame -> N pinhole views (+ optional nadir masks)
-    sfm      COLMAP features + matching + mapper (COLMAP or GLOMAP)
+    slice    equirect frame -> pinhole views: a cube map or a custom view list, written
+             as images/vNN/<frame>.jpg (+ optional nadir masks)
+    sfm      COLMAP features + matching + mapper. The views of one 360 frame are declared
+             as a camera rig (shared centre, known rotations), so COLMAP solves one pose
+             per frame instead of one per view
     gate     rejects captures with too few registered images / no parallax
     train    runs the configured splat trainer (Nerfstudio splatfacto or gsplat)
     export   finds / exports the .ply and copies it to the output folder
@@ -48,6 +51,9 @@ import cv2
 import numpy as np
 import yaml
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import naming  # noqa: E402
+
 STAGES = ["extract", "select", "slice", "sfm", "gate", "train", "export"]
 VIDEO_EXTS = {".mp4", ".mov", ".mkv", ".avi", ".m4v"}
 PAD = 2  # horizontal wrap padding (px) so remap interpolates across the 360 seam
@@ -70,6 +76,8 @@ DEFAULT_CONFIG: dict = {
     "extract": {"fps": 6, "max_frames": 0, "keep_raw": False},
     "select": {"target_fps": 2, "min_sharpness": 0.0},
     "slice": {
+        "layout": "cubemap",       # "cubemap" (6 faces) or "custom" (the views list below)
+        "cubemap_faces": None,     # subset of front/right/back/left/up/down; None = all six
         "size": 1600,
         "fov_deg": 90,
         "views": [[y, 0] for y in range(0, 360, 45)]
@@ -84,7 +92,8 @@ DEFAULT_CONFIG: dict = {
         "mapper": "colmap",
         "glomap_bin": "glomap",
         "matcher": "sequential",
-        "sequential_overlap_frames": 4,
+        "sequential_overlap_frames": 8,
+        "rig": True,             # treat the views of each 360 frame as one camera rig
         "use_gpu": True,
         "max_features": 8192,
         "fix_intrinsics": True,
@@ -202,7 +211,8 @@ class Job:
     raw = property(lambda s: s.dir / "raw")
     frames = property(lambda s: s.dir / "frames")
     images = property(lambda s: s.dir / "images")
-    masks = property(lambda s: s.dir / "masks")
+    masks = property(lambda s: s.dir / "masks")          # nadir masks (SfM + training)
+    sfm_masks = property(lambda s: s.dir / "sfm_masks")  # + feature ownership (SfM only)
     db = property(lambda s: s.dir / "database.db")
     sparse_raw = property(lambda s: s.dir / "sparse_raw")
     sparse = property(lambda s: s.dir / "sparse")
@@ -274,6 +284,7 @@ def stage_select(job: Job):
         scores = list(ex.map(sharpness, raw))
     out = reset_dir(job.frames)
     kept, dropped_blurry = 0, 0
+    chosen = {}  # selected frame -> extracted frame file, so the selection can be replayed
     for i in range(0, len(raw), window):
         chunk = list(range(i, min(i + window, len(raw))))
         best = max(chunk, key=lambda k: scores[k])
@@ -281,7 +292,9 @@ def stage_select(job: Job):
             dropped_blurry += 1
             continue
         shutil.copy2(raw[best], out / f"f{kept:05d}.jpg")
+        chosen[f"f{kept:05d}"] = raw[best].name
         kept += 1
+    job.write_json("selection.json", {"extract_fps": ec["fps"], "frames": chosen})
     log.info("Selected %d frames (window=%d, %d windows too blurry); sharpness median %.1f",
              kept, window, dropped_blurry, float(np.median(scores)) if scores else 0)
     if kept < 10:
@@ -293,6 +306,27 @@ def stage_select(job: Job):
 # --------------------------------------------------------------------------- #
 # Stage: slice (equirect -> pinhole views)
 # --------------------------------------------------------------------------- #
+def view_dirs(size: int, fov_deg: float, yaw_deg: float, pitch_deg: float) -> np.ndarray:
+    """Unit ray per pixel of a view, in the level 360 frame (x right, y down, z forward)."""
+    f = 0.5 * size / math.tan(math.radians(fov_deg) / 2)
+    u, v = np.meshgrid(np.arange(size) + 0.5, np.arange(size) + 0.5)
+    d = np.stack([(u - size / 2) / f, (v - size / 2) / f, np.ones((size, size))], -1)
+    d = d @ naming.rig_from_cam(yaw_deg, pitch_deg).T
+    return d / np.linalg.norm(d, axis=-1, keepdims=True)
+
+
+def ownership_masks(views: list, size: int, fov_deg: float) -> list[np.ndarray]:
+    """For overlapping views: each 360 pixel is 'owned' by the view whose axis is closest,
+    so SfM extracts its features once rather than in every view that sees it (the same
+    trick as COLMAP's panorama example). Training still uses every pixel."""
+    axes = np.array([naming.rig_from_cam(*v[:2]) @ np.array([0, 0, 1.0]) for v in views])
+    out = []
+    for i, (yaw, pitch) in enumerate(views):
+        owner = np.argmax(view_dirs(size, fov_deg, yaw, pitch) @ axes.T, axis=-1)
+        out.append((owner == i).astype(np.uint8) * 255)
+    return out
+
+
 def build_view_maps(eq_w: int, eq_h: int, size: int, fov_deg: float,
                     yaw_deg: float, pitch_deg: float):
     """Remap tables for one pinhole view. Camera: x right, y down, z forward.
@@ -320,13 +354,16 @@ def stage_slice(job: Job):
     first = cv2.imread(str(frames[0]))
     eq_h, eq_w = first.shape[:2]
     size, fov = c["size"], c["fov_deg"]
+    view_list = naming.resolve_views(c)
     native = eq_w * fov / 360
     if size > native * 1.05:
         log.warning("slice.size=%d exceeds native resolution (~%d px for %d deg FOV); "
                     "views will be upsampled", size, native, fov)
+    overlapping = naming.views_overlap(view_list, fov)
+    own = ownership_masks(view_list, size, fov) if overlapping else [None] * len(view_list)
 
     views = []
-    for idx, (yaw, pitch) in enumerate(c["views"]):
+    for idx, (yaw, pitch) in enumerate(view_list):
         mx, my, lat, f = build_view_maps(eq_w, eq_h, size, fov, yaw, pitch)
         mask = None
         if c.get("nadir_mask_deg") is not None:
@@ -336,27 +373,41 @@ def stage_slice(job: Job):
                     log.warning("View %d (yaw %s, pitch %s) is >75%% masked; consider removing it",
                                 idx, yaw, pitch)
                 mask = m
-        views.append((idx, mx, my, mask))
+        sfm_mask = mask
+        if own[idx] is not None:
+            sfm_mask = own[idx] if mask is None else np.minimum(own[idx], mask)
+        views.append((idx, mx, my, mask, sfm_mask))
 
-    reset_dir(job.images)
-    if job.masks.exists():
-        shutil.rmtree(job.masks)
-    if any(v[3] is not None for v in views):
-        job.masks.mkdir()
+    for d in (job.images, job.masks, job.sfm_masks):
+        if d.exists():
+            shutil.rmtree(d)
+    job.images.mkdir(parents=True)
+    has_mask = any(v[3] is not None for v in views)
+    has_sfm_mask = any(v[4] is not None for v in views) and overlapping
+    for idx, *_ in views:
+        (job.images / naming.view_folder(idx)).mkdir()
+        if has_mask:
+            (job.masks / naming.view_folder(idx)).mkdir(parents=True)
+        if has_sfm_mask:
+            (job.sfm_masks / naming.view_folder(idx)).mkdir(parents=True)
 
     q = [cv2.IMWRITE_JPEG_QUALITY, int(c["jpeg_quality"])]
+    full = np.full((size, size), 255, np.uint8)
 
     def process(frame: Path):
         eq = cv2.imread(str(frame))
         if eq is None or eq.shape[:2] != (eq_h, eq_w):
             raise PipelineError(f"Bad frame {frame}")
         eq = cv2.copyMakeBorder(eq, 0, 0, PAD, PAD, cv2.BORDER_WRAP)
-        for idx, mx, my, mask in views:
-            name = f"{frame.stem}_v{idx:02d}.jpg"
+        for idx, mx, my, mask, sfm_mask in views:
+            name = naming.image_name(frame.stem, idx)
             img = cv2.remap(eq, mx, my, cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
             cv2.imwrite(str(job.images / name), img, q)
-            if mask is not None:
-                cv2.imwrite(str(job.masks / f"{name}.png"), mask)  # COLMAP mask naming
+            if has_mask:  # COLMAP mask naming: <mask dir>/<image name>.png
+                cv2.imwrite(str(job.masks / f"{name}.png"), mask if mask is not None else full)
+            if has_sfm_mask:
+                cv2.imwrite(str(job.sfm_masks / f"{name}.png"),
+                            sfm_mask if sfm_mask is not None else full)
 
     with ThreadPoolExecutor(c["workers"]) as ex:
         list(ex.map(process, frames))
@@ -365,10 +416,12 @@ def stage_slice(job: Job):
     intr = {"model": "PINHOLE", "width": size, "height": size,
             "fx": f, "fy": f, "cx": size / 2, "cy": size / 2,
             "views_per_frame": len(views), "frames": len(frames),
-            "views": [list(v) for v in c["views"]]}
+            "views": [list(v) for v in view_list], "layout": c.get("layout", "custom"),
+            "naming": "view_folders", "overlapping_views": overlapping}
     job.write_json("intrinsics.json", intr)
-    log.info("Wrote %d images (%d frames x %d views, %dpx, f=%.1f)",
-             len(frames) * len(views), len(frames), len(views), size, f)
+    log.info("Wrote %d images (%d frames x %d views, %s layout, %dpx, f=%.1f%s)",
+             len(frames) * len(views), len(frames), len(views), intr["layout"], size, f,
+             ", SfM feature-ownership masks" if has_sfm_mask else "")
 
 
 # --------------------------------------------------------------------------- #
@@ -439,11 +492,20 @@ def resolve_colmap(binary: str) -> str:
     return str(exe)
 
 
-def run_mapper(job: Job, colmap: str, c: dict, mapper: str):
+def run_mapper(job: Job, colmap: str, c: dict, mapper: str, rig: bool = False):
     if mapper == "colmap_global":
         # GLOMAP built into COLMAP 4.x: solves all poses at once, far faster than incremental
-        run([colmap, "global_mapper", "--database_path", job.db,
-             "--image_path", job.images, "--output_path", job.sparse_raw])
+        cmd = [colmap, "global_mapper", "--database_path", job.db,
+               "--image_path", job.images, "--output_path", job.sparse_raw]
+        g_help = tool_help(colmap, "global_mapper")
+        if rig and "GlobalMapper.refine_sensor_from_rig" in g_help:
+            cmd += ["--GlobalMapper.refine_sensor_from_rig", "0"]
+        if c["fix_intrinsics"]:
+            for opt in ("ba_refine_focal_length", "ba_refine_principal_point",
+                        "ba_refine_extra_params"):
+                if f"GlobalMapper.{opt}" in g_help:
+                    cmd += [f"--GlobalMapper.{opt}", "0"]
+        run(cmd)
     elif mapper == "glomap":
         run([c["glomap_bin"], "mapper", "--database_path", job.db,
              "--image_path", job.images, "--output_path", job.sparse_raw])
@@ -454,6 +516,8 @@ def run_mapper(job: Job, colmap: str, c: dict, mapper: str):
             cmd += ["--Mapper.ba_refine_focal_length", "0",
                     "--Mapper.ba_refine_principal_point", "0",
                     "--Mapper.ba_refine_extra_params", "0"]
+        if rig:  # the views' relative rotations are exact: keep them fixed
+            cmd += ["--Mapper.ba_refine_sensor_from_rig", "0"]
         run(cmd)
     else:
         raise PipelineError(f"Unknown sfm.mapper '{mapper}'")
@@ -513,7 +577,8 @@ def frame_centres(txt_dir: Path) -> dict:
             continue
         R = qvec2rotmat(list(map(float, p[1:5])))
         c = -R.T @ np.array(list(map(float, p[5:8])))
-        acc.setdefault(p[9].rsplit("_v", 1)[0], []).append(c)
+        parsed = naming.parse(p[9])
+        acc.setdefault(parsed[0] if parsed else p[9], []).append(c)
     return {f: np.mean(cs, axis=0) for f, cs in acc.items()}
 
 
@@ -628,35 +693,67 @@ def stage_sfm(job: Job):
     ext_pre = "FeatureExtraction" if "FeatureExtraction.use_gpu" in ext_help else "SiftExtraction"
     gpu = "1" if c["use_gpu"] else "0"
 
+    # Rig mode: one camera per view folder, then tell COLMAP the folders are sensors of one
+    # rig (same centre, known rotations). Needs COLMAP >= 3.12 and the vNN/ folder layout.
+    folders = intr.get("naming") == "view_folders"
+    rig = bool(c.get("rig", True)) and folders and c["mapper"] != "mapanything"
+    if rig and "rig_config_path" not in tool_help(colmap, "rig_configurator"):
+        log.warning("This COLMAP has no rig support (needs 3.12+); solving views independently")
+        rig = False
+    if not rig and folders and not intr.get("overlapping_views", True) and \
+            c["mapper"] != "mapanything":
+        log.warning("Non-overlapping views (cube map) without a rig: COLMAP can't link the faces "
+                    "of one frame and will register far fewer images. Enable sfm.rig (COLMAP "
+                    "3.12+) or use slice.layout: custom.")
     cmd = [colmap, "feature_extractor", "--database_path", job.db, "--image_path", job.images,
-           "--ImageReader.single_camera", "1",
            "--ImageReader.camera_model", "PINHOLE",
            "--ImageReader.camera_params",
            f"{intr['fx']},{intr['fy']},{intr['cx']},{intr['cy']}",
            f"--{ext_pre}.use_gpu", gpu]
+    cmd += (["--ImageReader.single_camera_per_folder", "1"] if folders
+            else ["--ImageReader.single_camera", "1"])
     if "SiftExtraction.max_num_features" in ext_help:
         cmd += ["--SiftExtraction.max_num_features", c["max_features"]]
-    if job.masks.exists():
-        cmd += ["--ImageReader.mask_path", job.masks]
+    mask_dir = job.sfm_masks if job.sfm_masks.exists() else job.masks
+    if mask_dir.exists():
+        cmd += ["--ImageReader.mask_path", mask_dir]
     run(cmd)
+
+    if rig:
+        rig_cfg = job.dir / "rig_config.json"
+        rig_cfg.write_text(json.dumps(naming.colmap_rig_config(intr["views"]), indent=2))
+        run([colmap, "rig_configurator", "--database_path", job.db,
+             "--rig_config_path", rig_cfg])
+        log.info("Configured a %d-view camera rig: one pose per 360 frame", len(intr["views"]))
+
+    def matcher_flags(m_help: str) -> list:
+        m_pre = "FeatureMatching" if "FeatureMatching.use_gpu" in m_help else "SiftMatching"
+        flags = [f"--{m_pre}.use_gpu", gpu]
+        if rig:
+            # Views of one frame share a centre (pure rotation): nothing to learn from
+            # matching them; and verify matches against the rig geometry.
+            for opt in ("rig_verification", "skip_image_pairs_in_same_frame"):
+                if f"FeatureMatching.{opt}" in m_help:
+                    flags += [f"--FeatureMatching.{opt}", "1"]
+        return flags
 
     if c["matcher"] == "sequential":
         m_help = tool_help(colmap, "sequential_matcher")
-        m_pre = "FeatureMatching" if "FeatureMatching.use_gpu" in m_help else "SiftMatching"
-        overlap = intr["views_per_frame"] * c["sequential_overlap_frames"]
+        if rig:  # overlap counts frames; each image is matched to every view of those frames
+            overlap = c["sequential_overlap_frames"]
+        else:
+            overlap = intr["views_per_frame"] * c["sequential_overlap_frames"]
         run([colmap, "sequential_matcher", "--database_path", job.db,
              "--SequentialMatching.overlap", overlap,
-             "--SequentialMatching.quadratic_overlap", "1",
-             f"--{m_pre}.use_gpu", gpu])
+             "--SequentialMatching.quadratic_overlap", "1", *matcher_flags(m_help)])
     elif c["matcher"] == "exhaustive":
         m_help = tool_help(colmap, "exhaustive_matcher")
-        m_pre = "FeatureMatching" if "FeatureMatching.use_gpu" in m_help else "SiftMatching"
-        run([colmap, "exhaustive_matcher", "--database_path", job.db, f"--{m_pre}.use_gpu", gpu])
+        run([colmap, "exhaustive_matcher", "--database_path", job.db, *matcher_flags(m_help)])
     else:
         raise PipelineError(f"Unknown sfm.matcher '{c['matcher']}'")
 
     reset_dir(job.sparse_raw)
-    extra_stats = {"mapper": c["mapper"]}
+    extra_stats = {"mapper": c["mapper"], "rig": rig}
     if c["mapper"] == "mapanything":
         ma = c.get("mapanything", {})
         try:
@@ -668,10 +765,18 @@ def stage_sfm(job: Job):
                 raise
             log.warning("MapAnything route failed (%s). Falling back to the '%s' mapper.", e, fb)
             reset_dir(job.sparse_raw)
-            run_mapper(job, colmap, c, fb)
+            fb_rig = bool(c.get("rig", True)) and folders and \
+                "rig_config_path" in tool_help(colmap, "rig_configurator")
+            if fb_rig:  # matches are already in the database; add the rig before mapping
+                rig_cfg = job.dir / "rig_config.json"
+                rig_cfg.write_text(json.dumps(naming.colmap_rig_config(intr["views"]), indent=2))
+                run([colmap, "rig_configurator", "--database_path", job.db,
+                     "--rig_config_path", rig_cfg])
+            run_mapper(job, colmap, c, fb, rig=fb_rig)
+            extra_stats["rig"] = fb_rig
             extra_stats.update(mapper=fb, mapanything_failed=str(e)[:500])
     else:
-        run_mapper(job, colmap, c, c["mapper"])
+        run_mapper(job, colmap, c, c["mapper"], rig=rig)
 
     # Pick the largest sub-model (mappers can split a capture into several pieces)
     models = sorted(p for p in job.sparse_raw.iterdir() if p.is_dir())
@@ -695,7 +800,7 @@ def stage_sfm(job: Job):
     shutil.copytree(best, job.sparse / "0")
     for f in (txt_root / best.name).glob("*.txt"):  # TXT copy for trainers that read text
         shutil.copy2(f, job.sparse / "0" / f.name)
-    total = len(list(job.images.glob("*.jpg")))
+    total = len(list(job.images.rglob("*.jpg")))
     best_stats.update({"total_images": total, "models": len(models), "chosen_model": best.name,
                        "registered_ratio": best_stats["registered"] / max(total, 1)})
     best_stats.update(extra_stats)
@@ -782,6 +887,44 @@ def newest(paths) -> Path | None:
     return max(paths, key=lambda p: p.stat().st_mtime) if paths else None
 
 
+def write_scene_bundle(job: Job, dest: Path):
+    """Everything needed to keep refining a splat later without redoing SfM (e.g. the Difix
+    stage): the camera model without the bulky 2D observations, which frames were used,
+    the view layout and the settings. A few MB; the images themselves are re-cut from the
+    original video on demand."""
+    src = job.sparse / "0"
+    if not (src / "images.txt").exists():
+        log.warning("No TXT model to bundle; skipping scene bundle")
+        return
+    sp_out = reset_dir(dest / "sparse" / "0")
+    shutil.copy2(src / "cameras.txt", sp_out / "cameras.txt")
+    with open(src / "images.txt") as fin, open(sp_out / "images.txt", "w") as fout:
+        lines = [l for l in fin if not l.startswith("#")]
+        for i in range(0, len(lines), 2):
+            if len(lines[i].split()) >= 10:
+                fout.write(lines[i].rstrip("\n") + "\n\n")  # pose line, no 2D points
+    with open(src / "points3D.txt") as fin, open(sp_out / "points3D.txt", "w") as fout:
+        for line in fin:
+            if line.startswith("#"):
+                continue
+            p = line.split()
+            if len(p) >= 8:
+                fout.write(" ".join(p[:8]) + "\n")  # id xyz rgb error, no tracks
+    for name in ("intrinsics.json", "selection.json", "video.json", "sfm_stats.json"):
+        if (job.dir / name).exists():
+            shutil.copy2(job.dir / name, dest / name)
+    (dest / "config.yaml").write_text(yaml.safe_dump(
+        {k: v for k, v in job.cfg.items() if not k.startswith("_")}, sort_keys=False))
+    ts = job.train_dir / "train_stats.json"
+    if ts.exists():  # the exact trainer settings the splat was made with (e.g. anti-aliasing)
+        try:
+            settings = json.loads(ts.read_text()).get("settings") or {}
+            (dest / "train_settings.json").write_text(json.dumps(settings, indent=2))
+        except (OSError, ValueError) as e:
+            log.warning("Could not record training settings in the bundle: %s", e)
+    log.info("Scene bundle written to %s", dest)
+
+
 def stage_export(job: Job):
     backend = job.cfg["train"]["backend"]
     template = (job.cfg["export"].get("commands") or {}).get(backend)
@@ -804,6 +947,10 @@ def stage_export(job: Job):
         {"source": str(job.video), "ply": str(dest), "sfm": stats,
          "backend": backend, "iterations": job.cfg["train"]["iterations"]}, indent=2))
     log.info("Splat written to %s (%.1f MB)", dest, dest.stat().st_size / 1e6)
+    try:
+        write_scene_bundle(job, job.out / f"{job.name}_scene")
+    except Exception as e:  # never lose a finished splat over the bundle
+        log.warning("Could not write the scene bundle: %s", e)
 
 
 # --------------------------------------------------------------------------- #

@@ -11,10 +11,19 @@ select:
   min_sharpness: 0    # Laplacian-variance floor; check pipeline.log for typical values
 
 slice:
+  # How each 360 frame is cut into normal (pinhole) camera views:
+  #   cubemap  6 non-overlapping 90 deg faces (front/right/back/left/up/down). Every part of
+  #            the sphere appears exactly once, so training sees no duplicated pixels and SfM
+  #            has ~3x fewer images than the old 17-view layout.
+  #   custom   the overlapping `views` list below (more matching overlap inside each frame,
+  #            but much more redundant data for training).
+  layout: cubemap
+  # cubemap_faces: [front, right, back, left, down]   # e.g. drop "up" for open-sky scenes
   size: 1600          # px per view. 8K equirect = ~1920 px native per 90 deg view
-  fov_deg: 90
-  # [yaw, pitch] in degrees. Positive pitch looks up. No downward views by default
-  # because the bottom of a 360 frame usually contains the stick/drone/operator.
+  fov_deg: 90         # cubemap: 90 = faces meet exactly. 95-100 adds a small overlap margin
+  # Used when layout: custom. [yaw, pitch] in degrees; positive pitch looks up. A 90 deg view
+  # covers +/-45 deg around its pitch, so keep the pitch -45 views or the ground under the
+  # camera path comes out as a hole.
   views:
     - [0, 0]
     - [45, 0]
@@ -28,13 +37,16 @@ slice:
     - [90, 45]
     - [180, 45]
     - [270, 45]
-    - [0, 90]          # straight up: remove for outdoor scenes (open sky never registers)
-    # Floor coverage: uncomment these and set nadir_mask_deg so the mount is ignored by SfM
-    # - [0, -45]
-    # - [90, -45]
-    # - [180, -45]
-    # - [270, -45]
-  nadir_mask_deg: null   # e.g. -60: pixels below -60 deg latitude are masked for SfM
+    - [0, 90]
+    - [0, -45]
+    - [90, -45]
+    - [180, -45]
+    - [270, -45]
+  # Pixels below this latitude are ignored by SfM and training, so the drone/stick/stitch
+  # seam at the very bottom of the 360 frame isn't baked into the floor. The floor right under
+  # one frame is still filled in from neighbouring frames as the camera moves.
+  # null = use everything (if your stitched footage is clean all the way down).
+  nadir_mask_deg: -75
   jpeg_quality: 95
   workers: 8
 
@@ -46,10 +58,19 @@ sfm:
   # "mapanything"   hybrid: MapAnything predicts metric poses in minutes, then COLMAP
   #                 triangulates + bundle-adjusts them (precision from COLMAP, real-world
   #                 metres from MapAnything). Falls back to `mapanything.fallback` on failure.
-  mapper: colmap          # global mapper hung/crashed on the 214-frame patio run; incremental is proven
+  # Incremental is the proven default. With rig: true, colmap_global is worth trying: it was
+  # unreliable on the 2,782 independent images of the first patio run, but a rig turns that
+  # into ~214 frame poses.
+  mapper: colmap
   glomap_bin: glomap
   matcher: sequential    # "sequential" for video; "exhaustive" for small (<~500 image) sets
-  sequential_overlap_frames: 4   # match each frame's views against this many neighbour frames
+  # Neighbouring 360 frames each image is matched against (quadratic spacing: 1, 2, 4, 8...
+  # frames away, so 8 reaches 128 frames back for loop closure).
+  sequential_overlap_frames: 8
+  # Treat the views of each 360 frame as one camera rig: same centre, known rotations.
+  # COLMAP then solves one pose per frame instead of one per view: faster mapping, no views
+  # drifting off on their own, and the global mapper becomes practical. Needs COLMAP 3.12+.
+  rig: true
   use_gpu: true
   max_features: 8192     # 4096 roughly halves matching time
   fix_intrinsics: true   # intrinsics are known exactly from the slicing, so don't refine them
@@ -95,6 +116,9 @@ train:
     exposure: true       # per-photo exposure/white-balance correction (reduces blur + floaters)
     exposure_lr: 0.001
     exposure_reg: 0.01
+    bilagrid: true       # per-photo bilateral grid: local exposure/tone/tint (dusk, mixed light)
+    bilagrid_tv: 10.0    # smoothness of those corrections (higher = gentler)
+    antialiased: true    # Mip-Splatting style anti-aliasing (tick "Anti-aliased" in the viewer)
     test_every: 20       # hold out every 20th image to score quality honestly (0 = off)
     eval_every: 5000     # how often to print the held-out score
 
@@ -111,6 +135,20 @@ train:
     depth_grad_weight: 1.0     # surface-shape term (keeps flat things flat)
     depth_min_points: 30       # SfM points an image needs for its prior to be trusted
     depth_max_rel_error: 0.35  # priors that don't fit the SfM points this well are ignored
+
+    # Filling gaps from real data only (scene_fill.py) - no AI-generated content
+    depth_seed: true           # extra starting Gaussians from the depth prior where SfM is thin
+    depth_seed_max_points: 300000
+    depth_seed_min_weight: 0.5 # only where the prior's coverage weight marks SfM as sparse
+    sky_shell: true            # far-away sphere of Gaussians for sky/distant background
+    sky_points: 100000         # capped at 10% of cap_max
+    sky_radius_mult: 3.0
+    prune: true                # floater cleanup before export (ckpt.pt keeps everything)
+    prune_max_psnr_drop: 0.05  # cleanup is undone/lightened if held-out PSNR falls more
+    prune_min_opacity: 0.005   # MCMC keeps many faint Gaussians that matter together
+    prune_near_camera: 0.02    # x scene scale: specks hugging the flight path
+    prune_max_scale: 1.0       # x scene scale: oversized blobs (sky shell exempt)
+    prune_outlier_std: 3.0     # isolated specks; 0 = off
 
   # Extra placeholders available to the templates, e.g. {gsplat_dir}
   vars:
@@ -176,3 +214,22 @@ export:
       - "{config}"
       - --output-dir
       - "{export_dir}"
+
+difix:
+  # AI fill-in for the separate Difix refine step (difix_refine.py / foundry_transform/
+  # difix_transform.py). Not used by the main pipeline. NVIDIA Difix3D+: non-commercial licence.
+  rounds: 3              # progressive rounds, each further from the real flight path
+  views_per_round: 200   # new viewpoints rendered and cleaned per round
+  steps_per_round: 1500  # training steps after each round
+  novel_ratio: 0.3       # share of training steps on cleaned new views (the rest: real photos)
+  novel_weight: 0.3      # their loss weight relative to real photos
+  max_shift: 0.15        # how far off the path the last round goes, x scene size
+  yaw_jitter: 35         # degrees of extra turn left/right
+  pitch_jitter: 25       # degrees of extra tilt up/down
+  render_size: 768
+  use_ref: true          # guide Difix with the nearest real photo
+  dtype: fp16            # T4 has no bf16; switches to fp32 by itself if fp16 misbehaves
+  ref_candidates: 6      # reference photo = the one that actually shows the same surfaces
+  opacity_entropy: 0.003 # push Gaussians to solid-or-gone: clears see-through haze (0 = off)
+  appearance_warmup: auto # fit colour corrections first (2 steps per photo), so 'before' is fair
+  max_round_drop: 0.3    # undo a round that costs more held-out PSNR than this, and stop

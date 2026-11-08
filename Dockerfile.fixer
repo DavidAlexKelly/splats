@@ -1,0 +1,15 @@
+# Adds NVIDIA Fixer to a base image built with WITH_FIXER=0 (used by the GitHub build, which
+# splits the long build into jobs: base, then this, then Dockerfile.pod). Same result as the
+# full Dockerfile with WITH_FIXER=1.
+#
+#   docker build --platform linux/amd64 -f Dockerfile.fixer --build-arg BASE=yourname/splat-pod:base-1.0.0 -t yourname/splat-pod:fixer-1.0.0 .
+ARG BASE=splat-5090-base:1.0.0
+FROM ${BASE}
+USER root
+ARG FIXER_REF=b39dfcaf4eeec90dc943b057ff368c16252c6c6e
+ARG CUDA_ARCHS="89;120"
+ARG MAX_JOBS=4
+COPY pod/install_fixer.sh /tmp/install_fixer.sh
+RUN if [ ! -x /opt/fixer/bin/python ]; then \
+        FIXER_REF=${FIXER_REF} CUDA_ARCHS="${CUDA_ARCHS}" MAX_JOBS=${MAX_JOBS} bash /tmp/install_fixer.sh ; \
+    fi && rm -f /tmp/install_fixer.sh

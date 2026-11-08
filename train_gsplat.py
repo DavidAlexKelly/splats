@@ -67,7 +67,8 @@ DEFAULTS = {
     "exposure": True,            # learn a colour/exposure correction per photo
     "exposure_lr": 1e-3,
     "exposure_reg": 1e-2,        # keeps corrections small so true colours stay in the splat
-    "bilagrid": True,            # per-photo bilateral grid: local exposure/tone/tint correction
+    "bilagrid": False,           # per-photo bilateral grid. Off: it lets floaters near the camera
+                                 # hide behind per-photo corrections (dark blobs in viewers)
     "bilagrid_xy": 16,           # grid cells across the image
     "bilagrid_luma": 8,          # grid cells along brightness
     "bilagrid_lr": 2e-3,
@@ -111,6 +112,21 @@ SH_C0 = 0.28209479177387814
 # --------------------------------------------------------------------------- #
 # Settings
 # --------------------------------------------------------------------------- #
+def resolve_cap_max(value, total_mem_bytes: int | None) -> int:
+    """cap_max "auto": the Gaussian budget follows GPU memory (each Gaussian with its optimiser
+    state and gradients costs ~1 KB, plus rendering buffers). 3M is what a 16 GB T4 handles."""
+    if str(value).lower() != "auto":
+        return int(value)
+    gb = (total_mem_bytes or 0) / 1e9
+    if gb < 20:
+        return 3_000_000
+    if gb < 28:
+        return 4_000_000   # 24 GB: RTX 4090 / 3090, L4
+    if gb < 40:
+        return 5_000_000   # 32 GB: RTX 5090
+    return 6_000_000       # 48 GB+: L40S, A100, H100, RTX PRO 6000
+
+
 def load_settings(config_path: str | None, overrides: dict) -> dict:
     s = dict(DEFAULTS)
     if config_path:
@@ -507,6 +523,7 @@ def train(data_dir: Path, out_dir: Path, s: dict):
         raise RuntimeError("CUDA is not available to PyTorch. Install a CUDA build of torch "
                            "(see README) and check nvidia-smi.")
     device = torch.device("cuda")
+    s["cap_max"] = resolve_cap_max(s["cap_max"], torch.cuda.get_device_properties(0).total_memory)
     torch.manual_seed(s["seed"])
     np.random.seed(s["seed"])
     out_dir.mkdir(parents=True, exist_ok=True)

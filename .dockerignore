@@ -12,8 +12,9 @@
 !selftest.py
 !naming.py
 !scene_fill.py
-!difix_fix.py
-!difix_refine.py
+!fixer_fix.py
+!fixer_refine.py
 !appearance.py
 !pod_run.py
 !pod/start.sh
+!pod/install_fixer.sh

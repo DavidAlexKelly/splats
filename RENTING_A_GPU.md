@@ -59,7 +59,7 @@ GitHub's free Linux machines build it and push it to Docker Hub
    - *Secrets* tab: `DOCKERHUB_USERNAME` = your Docker Hub username,
      `DOCKERHUB_TOKEN` = the access token
    - *Variables* tab: `IMAGE` = `yourname/splat-pod`
-4. **Actions → Build pod image → Run workflow** (tag `1.0.0`). It takes about 2-4 hours; you
+4. **Actions → Build pod image → Run workflow** (tag `1.0.0`). It takes about 3-5 hours; you
    get an email if it fails. Result: `yourname/splat-pod:1.0.0` on Docker Hub.
 5. Code changes later: commit + push, then run the workflow again with **rebuild base**
    unticked, a new tag (e.g. `1.0.1`) and base tag `1.0.0`: a few minutes.
@@ -115,24 +115,24 @@ ssh -p 40123 root@203.0.113.7
 On the pod:
 ```
 tmux new -s run              # keeps running if your connection drops (reattach: tmux attach -t run)
-splat --selftest             # first time on a new image: GPU, COLMAP, gsplat and Difix (~5 min)
-splat                        # every video in /workspace/videos: splat, then Difix
+splat --selftest             # first time on a new image: GPU, COLMAP, gsplat and Fixer (~5 min)
+splat                        # every video in /workspace/videos: splat, then Fixer
 ```
 Useful variations:
 ```
 splat patio.mp4                              # one video
-splat --no-difix                             # real data only (Difix is non-commercial)
-splat --difix-only patio_v2                  # refine an existing result again
+splat --no-fixer                             # real data only, no AI fill-in
+splat --fixer-only patio_v2                  # refine an existing result again
 splat --rerun                                # process again with unchanged settings
-splat --overrides '{"train":{"custom":{"cap_max":5000000}}}'   # bigger model: the 5090 has 32 GB
-splat --difix-overrides '{"difix":{"rounds":2}}'
+splat --overrides '{"train":{"custom":{"cap_max":4000000}}}'   # fewer Gaussians if memory runs out
+splat --fixer-overrides '{"fixer":{"rounds":2}}'
 splat --stop-when-done                       # stop the pod at the end, even on failure
 ```
 Results, in `/workspace/splats` (never overwritten; re-runs become `patio_v2`, `_v3`...):
 ```
 patio/patio.ply              the splat (real data)
 patio/eval/*.jpg             photo vs splat comparisons; train_stats.json, pipeline.log, scene/
-patio_difix/patio_difix.ply  the AI-filled version; difix_stats.json, difix_preview/*.jpg
+patio_fixer/patio_fixer.ply  the AI-filled version; fixer_stats.json, fixer_preview/*.jpg
 _logs/                       full logs of every run
 ```
 Download (from cmd on your PC):
@@ -164,5 +164,11 @@ everything on start and stops itself. Log: `/workspace/splats/_logs/auto_run.log
 | Pod can't pull the image | Registry credentials missing/wrong in the template, or the tag doesn't exist. |
 | A run stopped when you closed the window | Run it inside `tmux` (see step 4). |
 
-Difix (the `_difix` results) is under NVIDIA's non-commercial licence. The 5090 also
-supports bf16, so NVIDIA Fixer (commercial use allowed) becomes an option later.
+Defaults that suit a rented GPU: the number of Gaussians follows the GPU's memory (5M on a
+5090, 4M on a 4090), and camera solving tries COLMAP's fast global mapper first (minutes),
+falling back to the slower incremental one if it places under 90% of the images or takes
+more than 20 minutes.
+
+The `_fixer` results come from NVIDIA Fixer (weights under the NVIDIA Open Model License:
+commercial use allowed) and contain AI-generated content; the real-only splat is always
+kept next to them. Fixer needs a bfloat16 GPU (RTX 30xx or newer, A100...).

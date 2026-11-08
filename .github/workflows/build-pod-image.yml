@@ -7,8 +7,10 @@
 #   Variables: IMAGE                e.g. yourname/splat-pod  (a private Docker Hub repository)
 #
 # Run: Actions tab → "Build pod image" → Run workflow.
-#   First time: full build (about 2-4 hours). It pushes yourname/splat-pod:base-<tag> (the big
-#   dependency layer) and yourname/splat-pod:<tag> (what RunPod uses).
+#   First time: full build, three jobs one after another (about 3-5 hours in all, each job well
+#   inside GitHub's 6-hour limit). It pushes yourname/splat-pod:base-<tag> (COLMAP, gsplat,
+#   models), yourname/splat-pod:fixer-<tag> (+ NVIDIA Fixer) and yourname/splat-pod:<tag>
+#   (what RunPod uses).
 #   Code changes later: untick "rebuild base", give a new tag and the base tag to reuse:
 #   a few minutes.
 name: Build pod image
@@ -21,7 +23,7 @@ on:
         required: true
         default: "1.0.0"
       rebuild_base:
-        description: "Rebuild the base (dependencies, ~2-4 h). Untick for code-only changes."
+        description: "Rebuild the base (dependencies, ~3-5 h). Untick for code-only changes."
         type: boolean
         default: true
       base_tag:
@@ -33,35 +35,18 @@ on:
         default: "89;120"
 
 jobs:
-  build:
+  settings:
     runs-on: ubuntu-latest
-    timeout-minutes: 350
+    outputs:
+      cuda_archs: ${{ steps.cfg.outputs.cuda_archs }}
+      torch_archs: ${{ steps.cfg.outputs.torch_archs }}
+      base: ${{ steps.cfg.outputs.base }}
+      fixer: ${{ steps.cfg.outputs.fixer }}
     steps:
       - name: Check settings
         run: |
           test -n "${{ vars.IMAGE }}" || { echo "::error::Set the IMAGE variable (Settings > Secrets and variables > Actions > Variables), e.g. yourname/splat-pod"; exit 1; }
           test -n "${{ secrets.DOCKERHUB_TOKEN }}" || { echo "::error::Set the DOCKERHUB_USERNAME and DOCKERHUB_TOKEN secrets"; exit 1; }
-
-      - name: Free disk space (the image needs ~40 GB while building)
-        if: ${{ inputs.rebuild_base }}
-        run: |
-          df -h /
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup \
-                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost /usr/share/swift \
-                      /usr/local/share/powershell /usr/local/lib/node_modules /opt/microsoft || true
-          sudo docker image prune -af || true
-          sudo apt-get clean
-          df -h /
-
-      - uses: actions/checkout@v4
-
-      - uses: docker/setup-buildx-action@v3
-
-      - uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
       - name: Work out tags and GPU lists
         id: cfg
         run: |
@@ -72,29 +57,98 @@ jobs:
           echo "cuda_archs=$gpus" >> "$GITHUB_OUTPUT"
           echo "torch_archs=$torch" >> "$GITHUB_OUTPUT"
           echo "base=${{ vars.IMAGE }}:base-$base" >> "$GITHUB_OUTPUT"
+          echo "fixer=${{ vars.IMAGE }}:fixer-$base" >> "$GITHUB_OUTPUT"
           echo "GPUs: $gpus (torch: $torch); base image: ${{ vars.IMAGE }}:base-$base"
 
+  base:
+    needs: settings
+    if: ${{ inputs.rebuild_base }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
+    steps:
+      - name: Free disk space (the image needs ~40 GB while building)
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup \
+                      /opt/hostedtoolcache /usr/local/share/boost /usr/share/swift \
+                      /usr/local/share/chromium /usr/local/julia* /opt/az /usr/share/miniconda \
+                      /usr/local/share/powershell /usr/local/lib/node_modules /opt/microsoft || true
+          sudo docker image prune -af || true
+          sudo apt-get clean
+          df -h /
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
       - name: Build and push the base image (CUDA 12.8, COLMAP, gsplat, models)
-        if: ${{ inputs.rebuild_base }}
         uses: docker/build-push-action@v6
         with:
           context: .
           file: Dockerfile
           platforms: linux/amd64
           push: true
-          tags: ${{ steps.cfg.outputs.base }}
+          tags: ${{ needs.settings.outputs.base }}
           build-args: |
             MAX_JOBS=2
             CUDA_BASE=12.8.1
             TORCH_CUDA=cu128
-            CUDA_ARCHS=${{ steps.cfg.outputs.cuda_archs }}
-            TORCH_ARCHS=${{ steps.cfg.outputs.torch_archs }}
+            CUDA_ARCHS=${{ needs.settings.outputs.cuda_archs }}
+            TORCH_ARCHS=${{ needs.settings.outputs.torch_archs }}
+            WITH_FIXER=0
 
-      - name: Free the build cache before the pod layer
-        if: ${{ inputs.rebuild_base }}
-        run: docker buildx prune -af || true; df -h /
+  fixer:
+    needs: [settings, base]
+    if: ${{ inputs.rebuild_base }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
+    steps:
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup \
+                      /opt/hostedtoolcache /usr/local/share/boost /usr/share/swift \
+                      /usr/local/share/chromium /usr/local/julia* /opt/az /usr/share/miniconda \
+                      /usr/local/share/powershell /usr/local/lib/node_modules /opt/microsoft || true
+          sudo docker image prune -af || true
+          df -h /
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Build and push the Fixer layer (Transformer Engine, NVIDIA Fixer weights)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.fixer
+          platforms: linux/amd64
+          push: true
+          tags: ${{ needs.settings.outputs.fixer }}
+          build-args: |
+            BASE=${{ needs.settings.outputs.base }}
+            MAX_JOBS=2
+            CUDA_ARCHS=${{ needs.settings.outputs.cuda_archs }}
 
-      - name: Build and push the pod image (SSH, runner, /workspace)
+  pod:
+    needs: [settings, base, fixer]
+    # runs after a full rebuild, or on its own for code-only changes
+    if: ${{ always() && needs.settings.result == 'success' && (needs.fixer.result == 'success' || !inputs.rebuild_base) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache || true
+          df -h /
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Build and push the pod image (code, SSH, runner, /workspace)
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -103,8 +157,7 @@ jobs:
           push: true
           tags: ${{ vars.IMAGE }}:${{ inputs.tag }}
           build-args: |
-            BASE=${{ steps.cfg.outputs.base }}
-
+            BASE=${{ needs.settings.outputs.fixer }}
       - name: Done
         run: |
           echo "### Pushed \`${{ vars.IMAGE }}:${{ inputs.tag }}\`" >> "$GITHUB_STEP_SUMMARY"

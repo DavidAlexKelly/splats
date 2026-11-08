@@ -1,24 +1,28 @@
 #!/usr/bin/env python3
 """
 One command for a rented GPU (RunPod, Vast.ai, or any Linux box with an NVIDIA GPU):
-360 videos in, splats out, then the optional Difix AI fill-in.
+360 videos in, splats out, then NVIDIA Fixer's AI fill-in.
 
     python /opt/app/pod_run.py                     # every video in /workspace/videos
     python /opt/app/pod_run.py patio.mp4           # just these videos
-    python /opt/app/pod_run.py --no-difix          # real-data splats only
-    python /opt/app/pod_run.py --difix-only patio_v2   # refine an existing result again
-    python /opt/app/pod_run.py --selftest          # check the GPU, COLMAP, gsplat and Difix first
+    python /opt/app/pod_run.py --no-fixer          # real-data splats only
+    python /opt/app/pod_run.py --fixer-only patio_v2   # refine an existing result again
+    python /opt/app/pod_run.py --selftest          # check the GPU, COLMAP, gsplat and Fixer first
     python /opt/app/pod_run.py --stop-when-done    # stop the pod at the end (stops the billing)
 
 Folders (override with --videos/--out/--work or SPLAT_VIDEOS/SPLAT_RESULTS/SPLAT_WORK):
     /workspace/videos   put your .mp4 files here
     /workspace/splats   results: <name>/<name>.ply (+ scene/, eval/, stats, log) and
-                        <name>_difix/<name>_difix.ply (+ difix_preview/, difix_stats.json)
+                        <name>_fixer/<name>_fixer.ply (+ fixer_preview/, fixer_stats.json)
     /workspace/work     temporary working files (tens of GB per 8K video; cleaned up)
 
 Behaves like the Foundry transforms: nothing is ever overwritten (a re-run becomes patio_v2,
 patio_v3, ...), and a video already processed with the same code + settings is skipped unless
-you pass --rerun or change --overrides. Difix is licensed for non-commercial use only.
+you pass --rerun or change --overrides. Fixer's weights are under the NVIDIA Open Model
+License (commercial use allowed); its results contain AI-generated content.
+
+The number of Gaussians follows the GPU's memory unless you set train.custom.cap_max yourself:
+3M up to 16 GB (T4-class), 4M at 24 GB (RTX 4090), 5M at 32 GB (RTX 5090), 6M above.
 """
 from __future__ import annotations
 
@@ -96,7 +100,7 @@ def child_env(work: Path) -> dict:
         "HF_HOME": env.get("HF_HOME", "/opt/hf"),
         "HF_HUB_OFFLINE": "1",
         "TORCH_HOME": env.get("TORCH_HOME", "/opt/torchhub"),
-        "HF_MODULES_CACHE": str(work / "hf_modules"),  # Difix's model code is copied here
+        "HF_MODULES_CACHE": str(work / "hf_modules"),
     })
     return env
 
@@ -161,7 +165,7 @@ def make_splat(video: Path, a, results: Path, work: Path, key: str) -> tuple[str
 
 
 def refine(folder: str, a, results: Path, videos: Path, work: Path) -> tuple[str, bool]:
-    """Difix refinement of an existing result folder."""
+    """Fixer refinement of an existing result folder."""
     src = results / folder
     ply, scene = src / f"{folder}.ply", src / "scene"
     if not ply.exists() or not (scene / "config.yaml").exists():
@@ -174,37 +178,37 @@ def refine(folder: str, a, results: Path, videos: Path, work: Path) -> tuple[str
         hits = [p for p in videos.iterdir() if p.stem == stem_of(folder)
                 and p.suffix.lower() in VIDEO_EXTS]
         if len(hits) != 1:
-            raise SystemExit(f"Can't find the video for {folder} in {videos} (Difix re-cuts the "
+            raise SystemExit(f"Can't find the video for {folder} in {videos} (Fixer re-cuts the "
                              "training images from it)")
         video = hits[0]
-    key = run_key("difix", folder, a.difix_overrides)
-    done = [p for p in published(results) if p.get("kind") == "difix"
+    key = run_key("fixer", folder, a.fixer_overrides)
+    done = [p for p in published(results) if p.get("kind") == "fixer"
             and p.get("run_key") == key and p.get("status") == "ok"]
     if done and not a.rerun:
         say(f"{folder}: already refined with these settings ({done[0]['folder']}); skipping")
         return done[0]["folder"], True
-    name = next_version(f"{folder}_difix", results)
+    name = next_version(f"{folder}_fixer", results)
     dest = results / name
     dest.mkdir(parents=True)
-    dwork = work / f"difix_{name}"
+    dwork = work / f"fixer_{name}"
     log = results / "_logs" / f"{name}_{time.strftime('%Y%m%d_%H%M%S')}.log"
-    code = stream([PY, APP / "difix_refine.py", "--video", video, "--scene", scene,
+    code = stream([PY, APP / "fixer_refine.py", "--video", video, "--scene", scene,
                    "--ply", ply, "--out", dest, "--work", dwork,
-                   "--overrides", json.dumps(a.difix_overrides)], child_env(work), log)
+                   "--overrides", json.dumps(a.fixer_overrides)], child_env(work), log)
     ok = code == 0 and (dest / "splat.ply").exists()
     if ok:
         (dest / "splat.ply").rename(dest / f"{name}.ply")
     else:
-        (dest / "FAILED.txt").write_text(f"Difix refinement of {folder} failed (exit code "
+        (dest / "FAILED.txt").write_text(f"Fixer refinement of {folder} failed (exit code "
                                          f"{code}). Full log: {log}\n")
     shutil.copy2(log, dest / "run.log")
     shutil.rmtree(dwork, ignore_errors=True)
     (dest / RUN_KEY).write_text(json.dumps(
-        {"source": folder, "video": video.name, "run_key": key, "kind": "difix",
-         "overrides": a.difix_overrides, "rerun": a.rerun, "status": "ok" if ok else "failed",
-         "note": "Contains AI-generated content (NVIDIA Difix3D+, non-commercial licence).",
+        {"source": folder, "video": video.name, "run_key": key, "kind": "fixer",
+         "overrides": a.fixer_overrides, "rerun": a.rerun, "status": "ok" if ok else "failed",
+         "note": "Contains AI-generated content (NVIDIA Fixer, NVIDIA Open Model License).",
          "finished": time.strftime("%Y-%m-%d %H:%M:%S")}, indent=2))
-    say(f"{folder}: Difix {'OK' if ok else 'FAILED'} -> {dest}")
+    say(f"{folder}: Fixer {'OK' if ok else 'FAILED'} -> {dest}")
     return name, ok
 
 
@@ -239,13 +243,13 @@ def main():
     ap.add_argument("--videos", type=Path, default=Path(os.environ.get("SPLAT_VIDEOS", "/workspace/videos")))
     ap.add_argument("--out", type=Path, default=Path(os.environ.get("SPLAT_RESULTS", "/workspace/splats")))
     ap.add_argument("--work", type=Path, default=Path(os.environ.get("SPLAT_WORK", "/workspace/work")))
-    ap.add_argument("--no-difix", action="store_true", help="skip the Difix AI fill-in")
-    ap.add_argument("--difix-only", nargs="+", metavar="FOLDER",
-                    help="only refine these existing result folders with Difix")
+    ap.add_argument("--no-fixer", action="store_true", help="skip the Fixer AI fill-in")
+    ap.add_argument("--fixer-only", nargs="+", metavar="FOLDER",
+                    help="only refine these existing result folders with Fixer")
     ap.add_argument("--overrides", type=json.loads, default={},
                     help='config.yaml overrides as JSON, e.g. \'{"train":{"custom":{"cap_max":5000000}}}\'')
-    ap.add_argument("--difix-overrides", type=json.loads, default={},
-                    help='Difix settings as JSON, e.g. \'{"difix":{"rounds":2}}\'')
+    ap.add_argument("--fixer-overrides", type=json.loads, default={},
+                    help='Fixer settings as JSON, e.g. \'{"fixer":{"rounds":2}}\'')
     ap.add_argument("--rerun", action="store_true", help="process again even if already done")
     ap.add_argument("--selftest", action="store_true", help="run the self-test first")
     ap.add_argument("--stop-when-done", action="store_true",
@@ -260,13 +264,13 @@ def main():
         if a.selftest:
             env = child_env(a.work)
             code = stream([PY, APP / "selftest.py", "--work", a.work / "selftest"]
-                          + ([] if a.no_difix else ["--with-difix"]), env,
+                          + ([] if a.no_fixer else ["--with-fixer"]), env,
                           a.out / "_logs" / f"selftest_{time.strftime('%Y%m%d_%H%M%S')}.log")
             shutil.rmtree(a.work / "selftest", ignore_errors=True)
             if code != 0:
                 raise SystemExit("Self-test failed (see above); nothing was processed.")
-        if a.difix_only:
-            for folder in a.difix_only:
+        if a.fixer_only:
+            for folder in a.fixer_only:
                 name, ok = refine(folder, a, a.out, a.videos, a.work)
                 summary.append(f"{'OK    ' if ok else 'FAILED'} {name}")
                 failed |= not ok
@@ -286,7 +290,7 @@ def main():
 
 
 def process_videos(a, summary: list[str]) -> bool:
-    """Main pipeline (+ Difix) for each video; returns True if anything failed."""
+    """Main pipeline (+ Fixer) for each video; returns True if anything failed."""
     failed = False
     videos = sorted(p for p in a.videos.iterdir() if p.suffix.lower() in VIDEO_EXTS)
     if a.videos_to_run:
@@ -314,7 +318,7 @@ def process_videos(a, summary: list[str]) -> bool:
             failed |= not ok
             if not ok:
                 continue
-        if not a.no_difix:
+        if not a.no_fixer:
             name, ok = refine(folder, a, a.out, a.videos, a.work)
             summary.append(f"{'OK    ' if ok else 'FAILED'} {name}")
             failed |= not ok

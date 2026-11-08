@@ -25,12 +25,13 @@ RUN (python3 -m venv /opt/vastcli && /opt/vastcli/bin/pip install --no-cache-dir
      && ln -s /opt/vastcli/bin/vastai /usr/local/bin/vastai) \
     || echo "vastai CLI not installed (optional)"
 
-COPY splat_pipeline.py train_gsplat.py depth_prior.py mapanything_init.py foundry_app.py splat_stream.py selftest.py naming.py scene_fill.py appearance.py difix_fix.py difix_refine.py pod_run.py config.yaml README.md /opt/app/
+COPY splat_pipeline.py train_gsplat.py depth_prior.py mapanything_init.py foundry_app.py splat_stream.py selftest.py naming.py scene_fill.py appearance.py fixer_fix.py fixer_refine.py pod_run.py config.yaml README.md /opt/app/
 COPY pod/start.sh /opt/app/pod/start.sh
 RUN chmod +x /opt/app/pod/start.sh /opt/app/pod_run.py \
     && ln -sf /opt/app/pod_run.py /usr/local/bin/splat \
     && sed -i '1s|.*|#!/opt/venv/bin/python|' /opt/app/pod_run.py \
     && python -c "import ast; ast.parse(open('/opt/app/pod_run.py').read())"
+RUN if [ -x /opt/fixer/bin/python ]; then FIXER_ATTENTION=torch /opt/fixer/bin/python -c "import sys; sys.path.insert(0, '/opt/app'); import fixer_fix as f; f.prepare_imports(); __import__(f.PIX2PIX); print('Fixer code imports OK')"; fi
 
 ENV HOME=/root \
     TORCH_EXTENSIONS_DIR=/root/.cache/torch_extensions \

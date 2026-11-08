@@ -4,7 +4,7 @@ GPU time to a real video.
 
     python selftest.py              # all checks, including a tiny end-to-end run
     python selftest.py --quick      # skip the end-to-end run (about 1 minute)
-    python selftest.py --with-difix # also load and run Difix (for the Difix refine transform)
+    python selftest.py --with-fixer # also load and run NVIDIA Fixer (the AI fill-in step)
 
 In Docker, on your own PC (needs the NVIDIA GPU passed through):
     docker run --rm --gpus all <image> python /opt/app/selftest.py
@@ -15,7 +15,7 @@ Checks
   gpu           torch sees the GPU; gsplat renders and back-propagates on it
   depth         the depth-prior model loads and runs (only if train.custom.depth_prior)
   mapanything   MapAnything loads (only if sfm.mapper is mapanything)
-  difix         Difix loads in its own environment and fixes one image (only with --with-difix)
+  fixer         Fixer loads in its own environment and fixes one image (only with --with-fixer)
   mini_run      renders a synthetic 360 video of a textured room and runs the REAL pipeline
                 on it (extract, select, slice, COLMAP, train, export) with tiny settings,
                 using the same config, binaries and Python as a real run
@@ -181,18 +181,20 @@ def check_mapanything(cfg: dict):
     return "PASS", f"{name} loads"
 
 
-@check("difix")
-def check_difix(enabled: bool):
+@check("fixer")
+def check_fixer(enabled: bool):
     if not enabled:
-        return "SKIP", "only checked with --with-difix"
-    py = os.environ.get("DIFIX_PYTHON", "/opt/difix/bin/python")
+        return "SKIP", "only checked with --with-fixer"
+    py = os.environ.get("FIXER_PYTHON", "/opt/fixer/bin/python")
     if not Path(py).exists():
-        raise RuntimeError(f"{py} not found: the image was built without Difix (WITH_DIFIX=0)")
-    out = sh([py, APP_DIR / "difix_fix.py", "--probe"], timeout=1800)
-    line = next((l for l in out.splitlines() if l.startswith("DIFIX_OK")), "")
+        raise RuntimeError(f"{py} not found: the image was built without Fixer (WITH_FIXER=0)")
+    out = sh([py, APP_DIR / "fixer_fix.py", "--probe"], timeout=1800)
+    line = next((l for l in out.splitlines() if l.startswith("FIXER_OK")), "")
     if not line:
-        raise RuntimeError("difix_fix.py --probe did not report DIFIX_OK\n" + out[-2000:])
-    return "PASS", "Difix loaded and ran: " + line.split(" ", 1)[1]
+        raise RuntimeError("fixer_fix.py --probe did not report FIXER_OK\n" + out[-2000:])
+    note = next((l for l in out.splitlines() if "PyTorch stand-in" in l or "retrying" in l), "")
+    return "PASS", "Fixer loaded and ran: " + line.split(" ", 1)[1] + (
+        " (slower PyTorch path: " + note[:120] + ")" if note else "")
 
 
 # --------------------------------------------------------------------------- #
@@ -328,7 +330,8 @@ HINTS = {
     "depth": "The depth model can't load. Training still runs without it; to silence this set "
              "train.custom.depth_prior: false, or rebuild with Dockerfile.quick.",
     "mapanything": "MapAnything can't load; the pipeline will fall back to COLMAP.",
-    "difix": "Difix can't load or run. Rebuild with WITH_DIFIX=1 (the default); the main "
+    "fixer": "Fixer can't load or run. It needs a bfloat16 GPU (RTX 30xx or newer, A100...) "
+             "and an image built with WITH_FIXER=1 (the default); the main "
              "pipeline doesn't need it.",
     "mini_run": "A stage failed on synthetic data: the log tail above shows which and why.",
 }
@@ -340,8 +343,8 @@ def main():
     ap.add_argument("--work", type=Path, help="scratch folder (default: SPLAT_WORK or a temp dir)")
     ap.add_argument("--keep", action="store_true", help="keep the mini run's files")
     ap.add_argument("--until", choices=sp.STAGES, help="stop the mini run after this stage")
-    ap.add_argument("--with-difix", action="store_true", help="also check Difix")
-    ap.add_argument("--only-difix", action="store_true", help="check only Difix (and the GPU)")
+    ap.add_argument("--with-fixer", action="store_true", help="also check NVIDIA Fixer")
+    ap.add_argument("--only-fixer", action="store_true", help="check only Fixer")
     ap.add_argument("--cpu-colmap", action="store_true", help="run COLMAP on the CPU in the mini run")
     args = ap.parse_args()
     logging.basicConfig(level=logging.INFO, stream=sys.stdout, datefmt="%H:%M:%S",
@@ -351,9 +354,9 @@ def main():
     log.info("Self-test using config %s, work folder %s", cfg_path, work)
     t0 = time.time()
 
-    if args.only_difix:
+    if args.only_fixer:
         check_environment(work)
-        check_difix(True)
+        check_fixer(True)
         args.quick = True
     else:
         check_environment(work)
@@ -361,7 +364,7 @@ def main():
         gpu_ok = check_gpu() == "PASS"
         check_depth(cfg)
         check_mapanything(cfg)
-        check_difix(args.with_difix)
+        check_fixer(args.with_fixer)
     if args.quick:
         RESULTS.append(("mini_run", "SKIP", 0.0, "--quick"))
     elif not gpu_ok and not args.until:

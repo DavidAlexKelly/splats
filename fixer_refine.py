@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Difix3D+-style refinement of a finished splat (AI fill-in; the result contains generated
-content, so keep the real-only splat alongside it).
+Difix3D+-style refinement of a finished splat with NVIDIA Fixer (AI fill-in: the result
+contains generated content, so keep the real-only splat alongside it).
 
   1. Rebuild the training images from the original video using the scene bundle published
      with every result (<name>/scene/: camera poses, which frames were used, settings).
@@ -10,17 +10,18 @@ content, so keep the real-only splat alongside it).
        - pick camera positions the drone never had: shifted off the flight path and turned
          towards angles between the cube faces, a little further out each round;
        - render the splat there (this is where holes and smears show);
-       - NVIDIA Difix cleans each render, guided by the nearest real photo;
+       - NVIDIA Fixer (Cosmos-based single-step diffusion) cleans each render;
        - keep training on the real photos plus these cleaned views (lower weight).
-  4. Report held-out PSNR on real photos before/after, save preview triplets
-     (render | Difix | nearest real photo) and the refined .ply.
+  4. Report held-out PSNR on real photos before/after (each round that makes the splat worse
+     on real photos is undone), save preview triplets (render | Fixer | real photo of the same
+     surfaces) and the refined .ply.
 
-    python difix_refine.py --video patio.mp4 --scene patio/scene --ply patio/patio.ply \\
+    python fixer_refine.py --video patio.mp4 --scene patio/scene --ply patio/patio.ply \\
         --out refined/ --work work/
 
-Settings live under `difix:` in config.yaml (the bundle's config, plus --overrides JSON).
-Difix itself runs in its own environment via difix_fix.py (see that file for the licence:
-non-commercial research/evaluation only).
+Settings live under `fixer:` in config.yaml (the bundle's config, plus --overrides JSON).
+Fixer runs in its own environment via fixer_fix.py. Licence: NVIDIA Open Model License
+(commercial use allowed) for the weights, Apache-2.0 for the code.
 """
 from __future__ import annotations
 
@@ -47,29 +48,31 @@ import naming  # noqa: E402
 import splat_pipeline as sp  # noqa: E402
 import train_gsplat as tg  # noqa: E402
 
-log = logging.getLogger("difix")
+log = logging.getLogger("fixer")
 
-DIFIX_DEFAULTS = {
+FIXER_DEFAULTS = {
     "rounds": 3,               # progressive rounds, each further from the real cameras
-    "views_per_round": 200,    # novel views rendered + fixed per round
+    "views_per_round": 200,    # novel views rendered + fixed per round (Fixer: ~20/s on a 5090)
     "steps_per_round": 1500,   # training steps after each round's fixes
     "novel_ratio": 0.3,        # share of training steps that use a fixed novel view
     "novel_weight": 0.3,       # loss weight of novel views relative to real photos
     "max_shift": 0.15,         # final camera offset from the flight path, x scene scale
     "yaw_jitter": 35,          # degrees of extra turn left/right (between cube faces)
     "pitch_jitter": 25,        # degrees of extra tilt up/down
-    "render_size": 768,        # novel views are square, this many px (Difix works at ~576-1024)
-    "timestep": 199,           # Difix's single denoising step (the published setting)
-    "use_ref": True,           # guide Difix with the nearest real photo (nvidia/difix_ref)
-    "dtype": "fp16",           # T4 has no bf16; falls back to fp32 automatically if needed
+    "render_width": 1024,      # Fixer works at 1024x576 (16:9); novel views are rendered so
+    "render_height": 576,
+    "hfov": 90,                # horizontal field of view of the novel views, degrees
+    "timestep": 250,           # Fixer's single denoising step (NVIDIA's published setting)
+    "gate": "raw",             # judge rounds on real photos as viewers see them ("raw"), or
+                               # with per-photo colour corrections ("corrected")
     "alpha_mask": 0.0,         # >0: only learn from fixed pixels where the render had this alpha
     "previews": 6,             # preview triplets saved per round
-    "ref_candidates": 6,       # photos checked for occlusion when choosing Difix's reference
+    "ref_candidates": 6,       # photos checked for occlusion when picking preview photos
     "opacity_entropy": 0.003,  # push Gaussians to clearly solid or gone (clears hanging haze)
     "appearance_warmup": "auto",  # steps fitting colour corrections first ("auto": 2 per photo)
     "max_round_drop": 0.3,     # a round that costs more held-out PSNR than this is undone
-    "python": "/opt/difix/bin/python",
-    "model": "nvidia/difix_ref",
+    "python": "/opt/fixer/bin/python",
+    "model": "/opt/fixer/models/pretrained/pretrained_fixer.pkl",
 }
 
 
@@ -141,7 +144,9 @@ def novel_cameras(ds, train_idx: list[int], n: int, shift: float, up: np.ndarray
     """Cameras off the flight path. Each starts from a real camera, moves `shift` x scene
     scale in a random direction (mostly sideways, some up/down) and turns by up to
     yaw_jitter/pitch_jitter degrees, so it sees between and beyond the real views."""
-    size = int(d["render_size"])
+    W, H = int(d["render_width"]), int(d["render_height"])
+    f = (W / 2) / math.tan(math.radians(float(d["hfov"])) / 2)
+    K = np.array([[f, 0, W / 2], [0, f, H / 2], [0, 0, 1]], np.float32)
     out = []
     for i in rng.choice(train_idx, size=min(n, len(train_idx)), replace=len(train_idx) < n):
         fr = ds.frames[i]
@@ -159,15 +164,14 @@ def novel_cameras(ds, train_idx: list[int], n: int, shift: float, up: np.ndarray
         Vn = np.eye(4)
         Vn[:3, :3] = R_new.T
         Vn[:3, 3] = -R_new.T @ c_new
-        f = fr["K"][0, 0] * size / fr["W"]
-        K = np.array([[f, 0, size / 2], [0, f, size / 2], [0, 0, 1]], np.float32)
-        out.append({"viewmat": Vn.astype(np.float32), "K": K, "W": size, "H": size,
+        out.append({"viewmat": Vn.astype(np.float32), "K": K.copy(), "W": W, "H": H,
                     "center": c_new, "forward": R_new[:, 2], "source": int(i)})
     return out
 
 
 class ReferencePicker:
-    """Chooses, for a new viewpoint, the real photo that shows the same surfaces.
+    """Chooses, for a new viewpoint, the real photo that shows the same surfaces (shown next
+    to the render and Fixer's output in the previews, to judge what Fixer made up).
 
     The new view's rendered depth gives a few hundred 3D points on what it sees. Every training
     photo is scored by how many of those points fall inside its frame at a similar distance
@@ -249,12 +253,12 @@ def nearest_photo(ds, train_idx: list[int], cam: dict) -> int:
 # --------------------------------------------------------------------------- #
 # Refinement
 # --------------------------------------------------------------------------- #
-def run_difix(d: dict, pairs: list[dict], work: Path):
+def run_fixer(d: dict, pairs: list[dict], work: Path):
     pairs_file = work / "pairs.json"
     pairs_file.write_text(json.dumps(pairs))
-    cmd = [d["python"], str(HERE / "difix_fix.py"), "--pairs", str(pairs_file),
-           "--model", d["model"], "--size", str(int(d["render_size"])),
-           "--timestep", str(int(d["timestep"])), "--dtype", d["dtype"]]
+    cmd = [d["python"], str(HERE / "fixer_fix.py"), "--pairs", str(pairs_file),
+           "--model", d["model"], "--timestep", str(int(d["timestep"])),
+           "--width", str(int(d["render_width"])), "--height", str(int(d["render_height"]))]
     sp.run(cmd, echo=True)
 
 
@@ -271,14 +275,15 @@ def refine(data_dir: Path, ply: Path, out_dir: Path, s: dict, d: dict) -> dict:
     random.seed(int(s["seed"]))
     torch.manual_seed(int(s["seed"]))
     out_dir.mkdir(parents=True, exist_ok=True)
-    work = out_dir / "_difix_work"
+    work = out_dir / "_fixer_work"
     work.mkdir(exist_ok=True)
 
     views = json.loads((data_dir / "intrinsics.json").read_text())["views"]
     ds = tg.ColmapDataset(data_dir, downscale=float(s["downscale"]), align=bool(s["align"]),
                           views=views, up_axis=s["up_axis"], world_scale=float(s["world_scale"]))
     train_idx, test_idx, expo_src = tg.split_train_test(ds, int(s["test_every"]))
-    up = tg.TARGET_AXES[s["up_axis"]][0].astype(np.float64) if s["align"] else np.array([0, -1.0, 0])
+    up = (tg.TARGET_AXES[s["up_axis"]][0].astype(np.float64) if ds.alignment is not None
+          else np.array([0, -1.0, 0]))  # unaligned: COLMAP's first camera, y down
 
     g = read_ply(ply)
     n = len(g["means"])
@@ -408,15 +413,17 @@ def refine(data_dir: Path, ply: Path, out_dir: Path, s: dict, d: dict) -> dict:
         appearance_opt_step()
     if warm:
         log.info("Fitted per-photo colour corrections for %d steps (splat frozen)", warm)
-    before, before_raw = evaluate("before Difix")
-    stats = {"rounds": [], "before_psnr": before, "before_psnr_raw": before_raw}
-    best = {"psnr": before, "round": 0, "splats": snapshot()}
-    picker = ReferencePicker(ds, train_idx, render_depth_small, d) if d["use_ref"] else None
+    raw_gate = str(d.get("gate", "raw")) == "raw"
+    before, before_raw = evaluate("before Fixer")
+    stats = {"rounds": [], "before_psnr": before, "before_psnr_raw": before_raw,
+             "gate": "raw" if raw_gate else "corrected"}
+    best = {"psnr": before_raw if raw_gate else before, "round": 0, "splats": snapshot()}
+    picker = ReferencePicker(ds, train_idx, render_depth_small, d) if int(d["previews"]) else None
     ref_scores: list[float] = []
     novel: list[tuple[np.ndarray, dict, np.ndarray]] = []  # (fixed image, camera, render alpha)
     step = 0
     t0 = time.time()
-    preview_dir = out_dir / "difix_preview"
+    preview_dir = out_dir / "fixer_preview"
     preview_dir.mkdir(exist_ok=True)
     try:
         for rnd in range(1, int(d["rounds"]) + 1):
@@ -428,25 +435,24 @@ def refine(data_dir: Path, ply: Path, out_dir: Path, s: dict, d: dict) -> dict:
             pairs, alphas = [], []
             with torch.no_grad():
                 for k, cam in enumerate(cams):
-                    r, a, _ = render(cam, with_depth=picker is not None)
+                    want_ref = picker is not None and k < int(d["previews"])
+                    r, a, _ = render(cam, with_depth=want_ref)
                     img = (r[0, ..., :3].clamp(0, 1) * 255).byte().cpu().numpy()
                     alpha = a[0, ..., 0].float().cpu().numpy()
                     alphas.append(alpha)
                     cv2.imwrite(str(rdir / f"{k:04d}_in.png"), cv2.cvtColor(img, cv2.COLOR_RGB2BGR))
                     pair = {"input": str(rdir / f"{k:04d}_in.png"),
                             "output": str(rdir / f"{k:04d}_fixed.png")}
-                    if picker is not None:
+                    if want_ref:
                         depth = r[0, ..., 3].cpu().numpy()  # expected depth
                         ref_i, shared = picker.pick(cam, depth, alpha)
                         ref_scores.append(shared)
                         pair["ref"] = str(ds.frames[ref_i]["path"])
                     pairs.append(pair)
             torch.cuda.empty_cache()
-            log.info("Round %d/%d: %d novel views at %.0f%% of max offset; running Difix%s",
-                     rnd, int(d["rounds"]), len(cams), 100 * rnd / int(d["rounds"]),
-                     f" (reference photos show {100 * np.mean(ref_scores[-len(cams):]):.0f}% of "
-                     "each view on average)" if ref_scores else "")
-            run_difix(d, pairs, rdir)
+            log.info("Round %d/%d: %d novel views at %.0f%% of max offset; running Fixer",
+                     rnd, int(d["rounds"]), len(cams), 100 * rnd / int(d["rounds"]))
+            run_fixer(d, pairs, rdir)
             novel = []
             for k, (cam, pair) in enumerate(zip(cams, pairs)):
                 fixed = cv2.imread(pair["output"])
@@ -456,12 +462,14 @@ def refine(data_dir: Path, ply: Path, out_dir: Path, s: dict, d: dict) -> dict:
                 if k < int(d["previews"]):
                     row = [cv2.imread(pair["input"]), fixed]
                     if pair.get("ref"):
-                        ref = cv2.imread(pair["ref"])
-                        row.append(cv2.resize(ref, (fixed.shape[1], fixed.shape[0])))
-                    cv2.imwrite(str(preview_dir / f"round{rnd}_{k:02d}_render_difix_photo.jpg"),
+                        ref = cv2.imread(pair["ref"])  # square photo: fit, keep its shape
+                        h = fixed.shape[0]
+                        ref = cv2.resize(ref, (int(ref.shape[1] * h / ref.shape[0]), h))
+                        row.append(ref)
+                    cv2.imwrite(str(preview_dir / f"round{rnd}_{k:02d}_render_fixer_photo.jpg"),
                                 np.concatenate(row, axis=1), [cv2.IMWRITE_JPEG_QUALITY, 90])
             if not novel:
-                raise RuntimeError("Difix produced no images")
+                raise RuntimeError("Fixer produced no images")
 
             # ---- train on real photos + fixed novel views -------------------------------
             for _ in range(int(d["steps_per_round"])):
@@ -511,9 +519,11 @@ def refine(data_dir: Path, ply: Path, out_dir: Path, s: dict, d: dict) -> dict:
                 if step % 250 == 0:
                     log.info("  step %d/%d  loss %.4f  (%.1f min)", step, total, loss.item(),
                              (time.time() - t0) / 60)
-            score, score_raw = evaluate(f"after round {rnd}")
+            score_c, score_raw = evaluate(f"after round {rnd}")
             stats["rounds"].append({"round": rnd, "shift": shift, "views": len(novel),
-                                    "psnr": score, "psnr_raw": score_raw})
+                                    "psnr": score_c, "psnr_raw": score_raw})
+            # Judge on what viewers see (no per-photo corrections) unless configured otherwise
+            score = score_raw if raw_gate else score_c
             if score is None or best["psnr"] is None or score >= best["psnr"]:
                 best = {"psnr": score, "round": rnd, "splats": snapshot()}
             elif score < best["psnr"] - float(d["max_round_drop"]):
@@ -530,9 +540,9 @@ def refine(data_dir: Path, ply: Path, out_dir: Path, s: dict, d: dict) -> dict:
             for k in list(splats.keys()):
                 splats[k] = torch.nn.Parameter(best["splats"][k].to(device))
     stats["kept_round"] = best["round"]
-    stats["after_psnr"] = best["psnr"]
-    stats["after_psnr_raw"] = next((r["psnr_raw"] for r in stats["rounds"]
-                                    if r["round"] == best["round"]), before_raw)
+    kept_r = next((r for r in stats["rounds"] if r["round"] == best["round"]), None)
+    stats["after_psnr"] = kept_r["psnr"] if kept_r else before
+    stats["after_psnr_raw"] = kept_r["psnr_raw"] if kept_r else before_raw
     del best
     with torch.no_grad():
         kept, dropped = tg.write_ply(
@@ -542,15 +552,14 @@ def refine(data_dir: Path, ply: Path, out_dir: Path, s: dict, d: dict) -> dict:
     with torch.no_grad():
         opa = torch.sigmoid(splats["opacities"])
         stats["faint_share"] = round(float(((opa > 0.005) & (opa < 0.3)).float().mean()), 4)
-    if ref_scores:
-        stats["reference_overlap"] = round(float(np.mean(ref_scores)), 3)
     stats.update({"gaussians": kept, "minutes": round((time.time() - t0) / 60, 1),
-                  "settings": d, "generated_content": True})
-    (out_dir / "difix_stats.json").write_text(json.dumps(stats, indent=2, default=float))
-    if stats["before_psnr"] is not None and stats["after_psnr"] is not None:
-        log.info("Difix refinement: held-out PSNR on real photos %.2f -> %.2f "
-                 "(it can dip slightly: the gain is in views the drone never saw)",
-                 stats["before_psnr"], stats["after_psnr"])
+                  "settings": d, "generated_content": True,
+                  "model": "NVIDIA Fixer (nvidia/Fixer, NVIDIA Open Model License)"})
+    (out_dir / "fixer_stats.json").write_text(json.dumps(stats, indent=2, default=float))
+    if stats["before_psnr_raw"] is not None and stats["after_psnr_raw"] is not None:
+        log.info("Fixer refinement: held-out PSNR on real photos %.2f -> %.2f as viewers see it "
+                 "(kept round %d; the gain is mostly in views the drone never saw)",
+                 stats["before_psnr_raw"], stats["after_psnr_raw"], stats["kept_round"])
     shutil.rmtree(work, ignore_errors=True)
     return stats
 
@@ -561,7 +570,7 @@ def main():
     ap.add_argument("--scene", type=Path, required=True, help="the result's scene/ bundle")
     ap.add_argument("--ply", type=Path, required=True)
     ap.add_argument("--out", type=Path, required=True)
-    ap.add_argument("--work", type=Path, default=Path("work_difix"))
+    ap.add_argument("--work", type=Path, default=Path("work_fixer"))
     ap.add_argument("--overrides", default="", help="JSON merged over the bundle's config")
     args = ap.parse_args()
     logging.basicConfig(level=logging.INFO, stream=sys.stdout, datefmt="%H:%M:%S",
@@ -572,7 +581,7 @@ def main():
     cfg = sp.deep_merge(sp.DEFAULT_CONFIG, cfg)
     if os.environ.get("COLMAP_BIN"):
         cfg["sfm"]["colmap_bin"] = os.environ["COLMAP_BIN"]
-    cfg_file = args.work / "difix_config.yaml"
+    cfg_file = args.work / "fixer_config.yaml"
     args.work.mkdir(parents=True, exist_ok=True)
     cfg_file.write_text(yaml.safe_dump(cfg, sort_keys=False))
     s = tg.load_settings(str(cfg_file), {})
@@ -581,11 +590,14 @@ def main():
     # Render the way the splat was trained: splats made before anti-aliasing was added are
     # 'classic'; mixing the two makes small details too thick or too faint.
     s["antialiased"] = bool(trained.get("antialiased", False))
-    d = {**DIFIX_DEFAULTS, **(cfg.get("difix") or {})}
+    # Per-photo local colour grids let floaters hide behind corrections: never use them here,
+    # even when an older bundle's config turned them on.
+    s["bilagrid"] = False
+    d = {**FIXER_DEFAULTS, **(cfg.get("fixer") or {})}
     data_dir = rebuild_images(args.video, args.scene, args.work, cfg)
     stats = refine(data_dir, args.ply, args.out, s, d)
-    print("DIFIX_REFINE_DONE " + json.dumps({k: stats[k] for k in ("before_psnr", "after_psnr",
-                                                                    "gaussians", "minutes")}))
+    print("FIXER_REFINE_DONE " + json.dumps({k: stats[k] for k in (
+        "before_psnr_raw", "after_psnr_raw", "kept_round", "gaussians", "minutes")}))
 
 
 if __name__ == "__main__":

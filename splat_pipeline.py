@@ -89,7 +89,9 @@ DEFAULT_CONFIG: dict = {
     },
     "sfm": {
         "colmap_bin": "colmap",
-        "mapper": "colmap",
+        "mapper": "auto",
+        "auto_min_registered": 0.9,
+        "auto_global_timeout_min": 20,
         "glomap_bin": "glomap",
         "matcher": "sequential",
         "sequential_overlap_frames": 8,
@@ -144,26 +146,52 @@ def load_config(path: Path | None) -> dict:
 # --------------------------------------------------------------------------- #
 # Helpers
 # --------------------------------------------------------------------------- #
-def run(cmd: list, cwd: Path | None = None, echo: bool = False) -> str:
-    """Run a command, stream output into the job log, raise with a tail on failure."""
+def run(cmd: list, cwd: Path | None = None, echo: bool = False,
+        timeout: float | None = None) -> str:
+    """Run a command, stream output into the job log, raise with a tail on failure (or when it
+    runs longer than `timeout` seconds: it is killed)."""
     cmd = [str(c) for c in cmd]
     log.info("$ %s", " ".join(cmd))
     try:
         proc = subprocess.Popen(
             cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True, bufsize=1, env={**os.environ, "PYTHONUNBUFFERED": "1", "SPLAT_CHILD": "1"},
+            start_new_session=bool(timeout),  # own process group, so a timeout kills it all
         )
     except FileNotFoundError:
         raise PipelineError(f"Executable not found: {cmd[0]} (is it installed and on PATH?)")
     tail: list[str] = []
     out_lines: list[str] = []
+    timer, timed_out = None, []
+    if timeout:
+        import threading
+
+        def _kill():
+            if proc.poll() is not None:  # finished right at the deadline: not a timeout
+                return
+            timed_out.append(True)
+            try:
+                os.killpg(proc.pid, 9)
+            except (OSError, AttributeError):  # Windows has no process groups here
+                proc.kill()
+        timer = threading.Timer(timeout, _kill)
+        timer.daemon = True
+        timer.start()
     assert proc.stdout is not None
-    for line in proc.stdout:
-        line = line.rstrip()
-        log.log(logging.INFO if echo else logging.DEBUG, "  %s", line)
-        out_lines.append(line)
-        tail = (tail + [line])[-40:]
-    if proc.wait() != 0:
+    try:
+        for line in proc.stdout:
+            line = line.rstrip()
+            log.log(logging.INFO if echo else logging.DEBUG, "  %s", line)
+            out_lines.append(line)
+            tail = (tail + [line])[-40:]
+        proc.wait()
+    finally:
+        if timer:
+            timer.cancel()
+    if timed_out:
+        raise PipelineError(f"{Path(cmd[0]).name} {cmd[1] if len(cmd) > 1 else ''} took longer "
+                            f"than {timeout / 60:.0f} min and was stopped")
+    if proc.returncode != 0:
         raise PipelineError(
             f"Command failed (exit {proc.returncode}): {cmd[0]}\n--- last output ---\n"
             + "\n".join(tail)
@@ -492,7 +520,60 @@ def resolve_colmap(binary: str) -> str:
     return str(exe)
 
 
-def run_mapper(job: Job, colmap: str, c: dict, mapper: str, rig: bool = False):
+def pick_model(job: Job, colmap: str):
+    """The largest sub-model in sparse_raw (mappers can split a capture into pieces):
+    (path, stats, number of models, TXT root)."""
+    models = sorted(p for p in job.sparse_raw.iterdir() if p.is_dir()) \
+        if job.sparse_raw.exists() else []
+    if not models:
+        raise GateError("SfM produced no model at all. Classic cause: camera didn't move "
+                        "(no parallax), or too few overlapping frames.")
+    best, best_stats = None, None
+    txt_root = reset_dir(job.dir / "sparse_txt")
+    for m in models:
+        txt = txt_root / m.name
+        txt.mkdir()
+        run([colmap, "model_converter", "--input_path", m, "--output_path", txt,
+             "--output_type", "TXT"])
+        centers, _, pts = read_model_txt(txt)
+        stats = model_stats(centers, pts)
+        log.info("Model %s: %d images, %d points", m.name, stats["registered"], stats["points"])
+        if best_stats is None or stats["registered"] > best_stats["registered"]:
+            best, best_stats = m, stats
+    return best, best_stats, len(models), txt_root
+
+
+def auto_mapper(job: Job, colmap: str, c: dict, rig: bool) -> str:
+    """Global mapper first (all poses at once: minutes instead of the best part of an hour
+    for ~1300 images), falling back to the incremental mapper if it registers too few
+    images, fails, or runs past auto_global_timeout_min (it once hung on a 214-frame rig).
+    Returns the mapper whose result is in sparse_raw."""
+    want = float(c.get("auto_min_registered", 0.9))
+    limit = float(c.get("auto_global_timeout_min", 20)) * 60
+    total = max(1, len(list(job.images.rglob("*.jpg"))))
+    if "GlobalMapper." in tool_help(colmap, "global_mapper"):
+        t0 = time.time()
+        try:
+            run_mapper(job, colmap, c, "colmap_global", rig=rig, timeout=limit)
+            _, stats, _, _ = pick_model(job, colmap)
+            ratio = stats["registered"] / total
+            if ratio >= want:
+                log.info("Global mapper: %d/%d images in %.0f min", stats["registered"], total,
+                         (time.time() - t0) / 60)
+                return "colmap_global"
+            log.warning("Global mapper registered only %.0f%% of images (want %.0f%%); "
+                        "running the incremental mapper instead", 100 * ratio, 100 * want)
+        except (PipelineError, GateError) as e:
+            log.warning("Global mapper failed (%s); running the incremental mapper", e)
+        reset_dir(job.sparse_raw)
+    else:
+        log.info("This COLMAP has no global_mapper; using the incremental mapper")
+    run_mapper(job, colmap, c, "colmap", rig=rig)
+    return "colmap"
+
+
+def run_mapper(job: Job, colmap: str, c: dict, mapper: str, rig: bool = False,
+               timeout: float | None = None):
     if mapper == "colmap_global":
         # GLOMAP built into COLMAP 4.x: solves all poses at once, far faster than incremental
         cmd = [colmap, "global_mapper", "--database_path", job.db,
@@ -505,7 +586,7 @@ def run_mapper(job: Job, colmap: str, c: dict, mapper: str, rig: bool = False):
                         "ba_refine_extra_params"):
                 if f"GlobalMapper.{opt}" in g_help:
                     cmd += [f"--GlobalMapper.{opt}", "0"]
-        run(cmd)
+        run(cmd, timeout=timeout)
     elif mapper == "glomap":
         run([c["glomap_bin"], "mapper", "--database_path", job.db,
              "--image_path", job.images, "--output_path", job.sparse_raw])
@@ -775,33 +856,18 @@ def stage_sfm(job: Job):
             run_mapper(job, colmap, c, fb, rig=fb_rig)
             extra_stats["rig"] = fb_rig
             extra_stats.update(mapper=fb, mapanything_failed=str(e)[:500])
+    elif c["mapper"] == "auto":
+        extra_stats["mapper"] = auto_mapper(job, colmap, c, rig)
     else:
         run_mapper(job, colmap, c, c["mapper"], rig=rig)
 
-    # Pick the largest sub-model (mappers can split a capture into several pieces)
-    models = sorted(p for p in job.sparse_raw.iterdir() if p.is_dir())
-    if not models:
-        raise GateError("SfM produced no model at all. Classic cause: camera didn't move "
-                        "(no parallax), or too few overlapping frames.")
-    best, best_stats = None, None
-    txt_root = reset_dir(job.dir / "sparse_txt")
-    for m in models:
-        txt = txt_root / m.name
-        txt.mkdir()
-        run([colmap, "model_converter", "--input_path", m, "--output_path", txt,
-             "--output_type", "TXT"])
-        centers, _, pts = read_model_txt(txt)
-        stats = model_stats(centers, pts)
-        log.info("Model %s: %d images, %d points", m.name, stats["registered"], stats["points"])
-        if best_stats is None or stats["registered"] > best_stats["registered"]:
-            best, best_stats = m, stats
-
+    best, best_stats, models, txt_root = pick_model(job, colmap)
     reset_dir(job.sparse)
     shutil.copytree(best, job.sparse / "0")
     for f in (txt_root / best.name).glob("*.txt"):  # TXT copy for trainers that read text
         shutil.copy2(f, job.sparse / "0" / f.name)
     total = len(list(job.images.rglob("*.jpg")))
-    best_stats.update({"total_images": total, "models": len(models), "chosen_model": best.name,
+    best_stats.update({"total_images": total, "models": models, "chosen_model": best.name,
                        "registered_ratio": best_stats["registered"] / max(total, 1)})
     best_stats.update(extra_stats)
     job.write_json("sfm_stats.json", best_stats)
@@ -888,7 +954,7 @@ def newest(paths) -> Path | None:
 
 
 def write_scene_bundle(job: Job, dest: Path):
-    """Everything needed to keep refining a splat later without redoing SfM (e.g. the Difix
+    """Everything needed to keep refining a splat later without redoing SfM (e.g. the Fixer
     stage): the camera model without the bulky 2D observations, which frames were used,
     the view layout and the settings. A few MB; the images themselves are re-cut from the
     original video on demand."""

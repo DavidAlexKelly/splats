@@ -1,8 +1,8 @@
 # 360 video -> Gaussian splat pipeline, packaged for Palantir Foundry compute modules.
 #
 # Build (from the splats folder; must be linux/amd64):
-#   Foundry lightweight transform (T4 etc.):
-#     docker build --platform linux/amd64 --build-arg MAX_JOBS=4 --build-arg APP_UID=5001 -t splat-pipeline:0.2.1 .
+#   Foundry lightweight transform (T4 etc.; the T4 can't run Fixer, so leave it out):
+#     docker build --platform linux/amd64 --build-arg MAX_JOBS=4 --build-arg APP_UID=5001 --build-arg WITH_FIXER=0 -t splat-pipeline:0.2.1 .
 #   Foundry compute module:
 #     docker build --platform linux/amd64 --build-arg MAX_JOBS=4 -t splat-pipeline:0.2.1 .
 #   RTX 5090 / rented GPUs (CUDA 12.8, Blackwell): use pod/build_5090.cmd or .sh, which passes
@@ -107,27 +107,16 @@ RUN if [ "$WITH_MAPANYTHING" = "1" ]; then \
         && python -c "from mapanything.models import MapAnything; MapAnything.from_pretrained('facebook/map-anything-apache')" \
         && mkdir -p /opt/torchhub && chmod -R a+rwX /opt/hf /opt/torchhub ; \
     fi
-# Difix (optional AI fill-in for the separate Difix refine transform, difix_refine.py).
-# NVIDIA License: non-commercial research/evaluation only. Difix pins old diffusers/
-# transformers, so it gets its own small venv that reuses torch from /opt/venv (a .pth file
-# appends /opt/venv's packages after its own). ~5 GB of weights. --build-arg WITH_DIFIX=0 skips.
-ARG WITH_DIFIX=1
-ARG DIFIX_REF=c76edc595586e16732c91ddee82f3a6d83a8a9cc
-RUN if [ "$WITH_DIFIX" = "1" ]; then \
-        /opt/venv/bin/python -m venv /opt/difix \
-        && MAIN_SP=$(/opt/venv/bin/python -c "import sysconfig; print(sysconfig.get_paths()['purelib'])") \
-        && DIFIX_SP=$(/opt/difix/bin/python -c "import sysconfig; print(sysconfig.get_paths()['purelib'])") \
-        && echo "$MAIN_SP" > "$DIFIX_SP/zz_main_venv.pth" \
-        && /opt/difix/bin/pip install --no-cache-dir "diffusers==0.25.1" "transformers==4.38.0" \
-            "huggingface-hub==0.25.1" "peft==0.9.0" "tokenizers<0.19" einops \
-        && git clone https://github.com/nv-tlabs/Difix3D.git /tmp/difix \
-        && git -C /tmp/difix checkout ${DIFIX_REF} \
-        && mkdir -p /opt/difix/src \
-        && cp /tmp/difix/src/pipeline_difix.py /tmp/difix/LICENSE.txt /opt/difix/src/ \
-        && rm -rf /tmp/difix \
-        && HF_HUB_OFFLINE=0 /opt/difix/bin/python -c "import sys, torch; sys.path.insert(0, '/opt/difix/src'); from pipeline_difix import DifixPipeline; DifixPipeline.from_pretrained('nvidia/difix_ref', trust_remote_code=True); print('Difix OK, torch', torch.__version__)" \
-        && chmod -R a+rwX "$HF_HOME/hub/models--nvidia--difix_ref" "$HF_HOME/modules" ; \
-    fi
+# NVIDIA Fixer: AI fill-in for the refine step (fixer_refine.py). Its own venv in /opt/fixer
+# sharing torch with /opt/venv, Transformer Engine compiled for CUDA_ARCHS, ~5.5 GB of weights.
+# Needs a bfloat16 GPU at run time (Ampere or newer: not the T4). --build-arg WITH_FIXER=0 skips.
+# Weights: NVIDIA Open Model License (commercial use allowed). Code: Apache-2.0.
+ARG WITH_FIXER=1
+ARG FIXER_REF=b39dfcaf4eeec90dc943b057ff368c16252c6c6e
+COPY pod/install_fixer.sh /tmp/install_fixer.sh
+RUN if [ "$WITH_FIXER" = "1" ]; then \
+        FIXER_REF=${FIXER_REF} CUDA_ARCHS="${CUDA_ARCHS}" MAX_JOBS=${MAX_JOBS} bash /tmp/install_fixer.sh ; \
+    fi && rm -f /tmp/install_fixer.sh
 ENV HF_HUB_OFFLINE=1
 # Fail the build (not a 2-hour GPU run) if anything above replaced the PyTorch stack, or the
 # wheels lack kernels for a GPU this image is built for.
@@ -141,7 +130,8 @@ print('OK torch', torch.__version__, 'torchvision', torchvision.__version__, 'ke
 
 # ---- app ------------------------------------------------------------------------------
 WORKDIR /opt/app
-COPY splat_pipeline.py train_gsplat.py depth_prior.py mapanything_init.py foundry_app.py splat_stream.py selftest.py naming.py scene_fill.py appearance.py difix_fix.py difix_refine.py config.yaml README.md /opt/app/
+COPY splat_pipeline.py train_gsplat.py depth_prior.py mapanything_init.py foundry_app.py splat_stream.py selftest.py naming.py scene_fill.py appearance.py fixer_fix.py fixer_refine.py config.yaml README.md /opt/app/
+RUN if [ -x /opt/fixer/bin/python ]; then FIXER_ATTENTION=torch /opt/fixer/bin/python -c "import sys; sys.path.insert(0, '/opt/app'); import fixer_fix as f; f.prepare_imports(); __import__(f.PIX2PIX); print('Fixer code imports OK')"; fi
 
 # Foundry requires a non-root, numeric user: compute modules accept any (default 5000);
 # lightweight "bring your own container" transforms require exactly 5001, so build those

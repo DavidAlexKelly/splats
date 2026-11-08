@@ -112,24 +112,12 @@ Resources are set at the top too (`CPU_CORES`, `MEMORY_GB`, `GPU_TYPE`). The def
 8K video needs tens of GB of temporary space) and any maximum build duration. Start with a
 10-15 second clip.
 
-### A6. Difix fill-in transform (optional)
+### A6. AI fill-in (NVIDIA Fixer): not on the T4
 
-`foundry_transform/difix_transform.py` is a second transform in the same repository, same
-image, same T4. It refines splats the main transform already made; it doesn't touch them.
-
-1. Create an empty dataset (e.g. `splat_files_difix`) and put its RID in `DIFIX_DATASET`.
-2. Results to refine need a `scene/` folder. Results from before that update don't have one:
-   bump `RERUN` in `splat_transform.py` once to make a new version of them.
-3. `TARGETS = ["latest"]` refines the newest version of every video; or name folders,
-   e.g. `["patio_v4"]`. Build the output dataset.
-
-Takes about 30-60 min per scene on a T4 (3 rounds x 200 views). `DIFIX_OVERRIDES =
-{"difix": {"rounds": 2, "views_per_round": 120}}` is a quicker first look. Each target gets
-`<folder>_difix/` (`_difix_v2`, ... on re-runs); a failed one gets `FAILED.txt` and is tried
-again next build. Licence: non-commercial research/evaluation only (see README).
-
-The image needs the Difix environment: the full `Dockerfile` and `Dockerfile.quick` both add it
-by default (about 5 GB more, downloaded once at build time).
+The AI fill-in step (`fixer_refine.py`, NVIDIA Fixer) needs a bfloat16 GPU (Ampere or
+newer); Foundry's T4 doesn't have it, so on Foundry only the main pipeline runs. Run Fixer on
+a rented GPU instead (RENTING_A_GPU.md), or on a Foundry A10G/L4/A100 profile if you have
+one. Building the Foundry image with `--build-arg WITH_FIXER=0` leaves it out (saves ~7 GB).
 
 ---
 
@@ -344,7 +332,7 @@ Everything in `config.yaml` can be overridden per deployment with `SPLAT_CONFIG_
 | More detail on a 24–80 GB GPU | `{"train":{"custom":{"cap_max":5000000}}}` |
 | T4, hybrid mapper | `{"sfm":{"mapper":"mapanything","mapanything":{"settings":{"window_frames":24}}}}` |
 | Real-world scale | `{"train":{"custom":{"world_scale":0.25}}}` |
-| Faster SfM (try once stable) | `{"sfm":{"mapper":"colmap_global"}}` |
+| Always the slow, robust SfM | `{"sfm":{"mapper":"colmap"}}` (the default `auto` tries the fast global mapper first) |
 | Metric + faster SfM (MapAnything + COLMAP hybrid) | `{"sfm":{"mapper":"mapanything","mapanything":{"settings":{"window_frames":64}}}}` |
 | Longer training | `{"train":{"iterations":40000}}` |
 

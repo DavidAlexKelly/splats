@@ -52,7 +52,9 @@ slice:
 
 sfm:
   colmap_bin: tools/COLMAP.bat   # Windows release; on Linux/containers just: colmap
-  # "colmap"        incremental mapper: robust, slow (your patio took ~2h20m)
+  # "auto"          global mapper first; if it places < auto_min_registered of the images,
+  #                 the incremental one (best of both: usually minutes, never worse coverage)
+  # "colmap"        incremental mapper: robust, slow (patio: ~30-60 min even on 27 cores)
   # "colmap_global" COLMAP 4.x built-in GLOMAP: usually minutes for the same data
   # "glomap"        standalone GLOMAP binary (glomap_bin)
   # "mapanything"   hybrid: MapAnything predicts metric poses in minutes, then COLMAP
@@ -61,7 +63,9 @@ sfm:
   # Incremental is the proven default. With rig: true, colmap_global is worth trying: it was
   # unreliable on the 2,782 independent images of the first patio run, but a rig turns that
   # into ~214 frame poses.
-  mapper: colmap
+  mapper: auto
+  auto_min_registered: 0.9
+  auto_global_timeout_min: 20    # "auto": give up on the global mapper after this long
   glomap_bin: glomap
   matcher: sequential    # "sequential" for video; "exhaustive" for small (<~500 image) sets
   # Neighbouring 360 frames each image is matched against (quadratic spacing: 1, 2, 4, 8...
@@ -99,7 +103,7 @@ train:
   # Settings for the built-in trainer (train_gsplat.py)
   custom:
     strategy: mcmc       # mcmc keeps a fixed Gaussian budget, so VRAM use is predictable
-    cap_max: 3000000     # patio used 2.2 GB at 1M on the 2080; 3M should fit in 8 GB
+    cap_max: auto        # Gaussian budget from GPU memory: 3M (16 GB) / 4M (24 GB) / 5M (32 GB) / 6M
     sh_degree: 3
     downscale: 1         # 2 = train at half resolution (~4x less memory per image)
     ssim_lambda: 0.2
@@ -116,7 +120,7 @@ train:
     exposure: true       # per-photo exposure/white-balance correction (reduces blur + floaters)
     exposure_lr: 0.001
     exposure_reg: 0.01
-    bilagrid: true       # per-photo bilateral grid: local exposure/tone/tint (dusk, mixed light)
+    bilagrid: false      # per-photo local colour grids. Off: they let floaters hide (dark blobs)
     bilagrid_tv: 10.0    # smoothness of those corrections (higher = gentler)
     antialiased: true    # Mip-Splatting style anti-aliasing (tick "Anti-aliased" in the viewer)
     test_every: 20       # hold out every 20th image to score quality honestly (0 = off)
@@ -215,9 +219,10 @@ export:
       - --output-dir
       - "{export_dir}"
 
-difix:
-  # AI fill-in for the separate Difix refine step (difix_refine.py / foundry_transform/
-  # difix_transform.py). Not used by the main pipeline. NVIDIA Difix3D+: non-commercial licence.
+fixer:
+  # AI fill-in with NVIDIA Fixer (fixer_refine.py; pod_run.py runs it after each splat).
+  # Needs a bfloat16 GPU (RTX 30xx or newer, A100...; not the T4). Weights: NVIDIA Open Model
+  # License (commercial use allowed). Results contain AI-generated content.
   rounds: 3              # progressive rounds, each further from the real flight path
   views_per_round: 200   # new viewpoints rendered and cleaned per round
   steps_per_round: 1500  # training steps after each round
@@ -226,10 +231,12 @@ difix:
   max_shift: 0.15        # how far off the path the last round goes, x scene size
   yaw_jitter: 35         # degrees of extra turn left/right
   pitch_jitter: 25       # degrees of extra tilt up/down
-  render_size: 768
-  use_ref: true          # guide Difix with the nearest real photo
-  dtype: fp16            # T4 has no bf16; switches to fp32 by itself if fp16 misbehaves
-  ref_candidates: 6      # reference photo = the one that actually shows the same surfaces
+  render_width: 1024     # Fixer's native 16:9 resolution
+  render_height: 576
+  hfov: 90               # field of view of the new viewpoints, degrees across
+  timestep: 250          # Fixer's single denoising step (NVIDIA's setting)
+  gate: raw              # judge each round on real photos as viewers see them
+  max_round_drop: 0.3    # undo a round that costs more held-out PSNR than this, and stop
   opacity_entropy: 0.003 # push Gaussians to solid-or-gone: clears see-through haze (0 = off)
   appearance_warmup: auto # fit colour corrections first (2 steps per photo), so 'before' is fair
-  max_round_drop: 0.3    # undo a round that costs more held-out PSNR than this, and stop
+  previews: 6            # render | Fixer | real photo triplets saved per round

@@ -51,7 +51,7 @@ class BilateralGrids(torch.nn.Module):
 
         Without this the corrections and the splat can drift together (the splat turns purple
         and every photo's grid turns it back), which looks fine in training but wrong in any
-        viewer and in Difix, which see the splat without corrections."""
+        viewer and in Fixer, which see the splat without corrections."""
         g = self.grids[idx]
         eye = torch.tensor([1.0, 0, 0, 0, 0, 1.0, 0, 0, 0, 0, 1.0, 0], device=g.device)
         drift = g.mean(0, keepdim=True) - eye.view(1, 12, 1, 1, 1)

@@ -158,7 +158,7 @@ def result_files(video_stem: str, res: dict, out_dir: Path) -> list[tuple[Path, 
             files.append((f, f"{video_stem}/{f.name}"))
     for f in sorted((wd / "train" / "eval").glob("*.jpg")) if wd.exists() else []:
         files.append((f, f"{video_stem}/eval/{f.name}"))
-    scene = out_dir / f"{video_stem}_scene"  # small bundle for later refinement (difix_refine.py)
+    scene = out_dir / f"{video_stem}_scene"  # small bundle for later refinement (fixer_refine.py)
     for f in sorted(scene.rglob("*")) if scene.exists() else []:
         if f.is_file():
             files.append((f, f"{video_stem}/scene/{f.relative_to(scene).as_posix()}"))

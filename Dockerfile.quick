@@ -50,30 +50,21 @@ RUN T=$(python -c "import torch; print(torch.__version__)"); \
     && python -c "import torch, torchvision, torchvision.ops, gsplat; from transformers import AutoImageProcessor, AutoModelForDepthEstimation as M; n='depth-anything/Depth-Anything-V2-Small-hf'; AutoImageProcessor.from_pretrained(n); M.from_pretrained(n); print('OK torch', torch.__version__, 'cuda', torch.version.cuda, 'torchvision', torchvision.__version__, 'gsplat', gsplat.__version__)" \
     && (python -c "import mapanything" && echo "mapanything imports OK" || echo "WARNING: mapanything import failed (only matters for sfm.mapper: mapanything)")
 
-# Difix (optional AI fill-in for the separate Difix refine transform, difix_refine.py).
-# NVIDIA License: non-commercial research/evaluation only. Difix pins old diffusers/
-# transformers, so it gets its own small venv that reuses torch from /opt/venv (a .pth file
-# appends /opt/venv's packages after its own). ~5 GB of weights. --build-arg WITH_DIFIX=0 skips.
-# Skipped automatically if the base image already has /opt/difix.
-ARG WITH_DIFIX=1
-ARG DIFIX_REF=c76edc595586e16732c91ddee82f3a6d83a8a9cc
-RUN if [ "$WITH_DIFIX" = "1" ] && [ ! -x /opt/difix/bin/python ]; then \
-        /opt/venv/bin/python -m venv /opt/difix \
-        && MAIN_SP=$(/opt/venv/bin/python -c "import sysconfig; print(sysconfig.get_paths()['purelib'])") \
-        && DIFIX_SP=$(/opt/difix/bin/python -c "import sysconfig; print(sysconfig.get_paths()['purelib'])") \
-        && echo "$MAIN_SP" > "$DIFIX_SP/zz_main_venv.pth" \
-        && /opt/difix/bin/pip install --no-cache-dir "diffusers==0.25.1" "transformers==4.38.0" \
-            "huggingface-hub==0.25.1" "peft==0.9.0" "tokenizers<0.19" einops \
-        && git clone https://github.com/nv-tlabs/Difix3D.git /tmp/difix \
-        && git -C /tmp/difix checkout ${DIFIX_REF} \
-        && mkdir -p /opt/difix/src \
-        && cp /tmp/difix/src/pipeline_difix.py /tmp/difix/LICENSE.txt /opt/difix/src/ \
-        && rm -rf /tmp/difix \
-        && HF_HUB_OFFLINE=0 /opt/difix/bin/python -c "import sys, torch; sys.path.insert(0, '/opt/difix/src'); from pipeline_difix import DifixPipeline; DifixPipeline.from_pretrained('nvidia/difix_ref', trust_remote_code=True); print('Difix OK, torch', torch.__version__)" \
-        && chmod -R a+rwX "$HF_HOME/hub/models--nvidia--difix_ref" "$HF_HOME/modules" ; \
-    fi
+# NVIDIA Fixer (see the Dockerfile). Off by default here: this file is for the Foundry/T4
+# image, and the T4 can't run Fixer (no bfloat16). --build-arg WITH_FIXER=1 adds it (20-60
+# min: Transformer Engine compile + 5.5 GB of weights); skipped if the base already has it.
+# CUDA_ARCHS: the GPUs Transformer Engine is compiled for (89 = RTX 40xx, 120 = RTX 50xx).
+ARG WITH_FIXER=0
+ARG FIXER_REF=b39dfcaf4eeec90dc943b057ff368c16252c6c6e
+ARG CUDA_ARCHS="89;120"
+ARG MAX_JOBS=4
+COPY pod/install_fixer.sh /tmp/install_fixer.sh
+RUN if [ "$WITH_FIXER" = "1" ] && [ ! -x /opt/fixer/bin/python ]; then \
+        FIXER_REF=${FIXER_REF} CUDA_ARCHS="${CUDA_ARCHS}" MAX_JOBS=${MAX_JOBS} bash /tmp/install_fixer.sh ; \
+    fi && rm -f /tmp/install_fixer.sh
 
-COPY --chown=5001:5001 splat_pipeline.py train_gsplat.py depth_prior.py mapanything_init.py foundry_app.py splat_stream.py selftest.py naming.py scene_fill.py appearance.py difix_fix.py difix_refine.py config.yaml README.md /opt/app/
+COPY --chown=5001:5001 splat_pipeline.py train_gsplat.py depth_prior.py mapanything_init.py foundry_app.py splat_stream.py selftest.py naming.py scene_fill.py appearance.py fixer_fix.py fixer_refine.py config.yaml README.md /opt/app/
+RUN if [ -x /opt/fixer/bin/python ]; then FIXER_ATTENTION=torch /opt/fixer/bin/python -c "import sys; sys.path.insert(0, '/opt/app'); import fixer_fix as f; f.prepare_imports(); __import__(f.PIX2PIX); print('Fixer code imports OK')"; fi
 
 # Foundry container transforms must run as user 5001. If BASE was built with the default
 # user 5000 (the compute-module setting), switch that user to 5001 here and hand it its folders.

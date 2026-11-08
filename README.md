@@ -18,6 +18,11 @@ splats/
 ├── mapanything_init.py     # metric pose initialisation for sfm.mapper: mapanything
 ├── naming.py               # view layouts (cube map / custom), image naming, COLMAP rig config
 ├── scene_fill.py           # depth seeding, sky shell, floater cleanup (filling gaps, real data only)
+├── appearance.py           # per-photo bilateral colour grids (off by default)
+├── fixer_refine.py         # AI fill-in on a finished splat with NVIDIA Fixer
+├── fixer_fix.py            # runs Fixer itself (in /opt/fixer, the image's Fixer environment)
+├── pod_run.py              # one command on a rented GPU: videos in, splats (+ Fixer) out
+├── pod/                    # rented-GPU image: build scripts, start script, install_fixer.sh
 ├── selftest.py             # checks every stage in minutes (see "Self-test")
 ├── splat_stream.py         # file <-> stream-record chunking for Foundry stream outputs
 ├── foundry_transform/
@@ -26,8 +31,10 @@ splats/
 │   └── splat_stream_schema.json
 ├── config.yaml             # every setting lives here
 ├── requirements.txt        # PC install
-├── requirements-container.txt, Dockerfile, Dockerfile.quick, .dockerignore   # Foundry / Docker image
+├── requirements-container.txt, Dockerfile, Dockerfile.quick, Dockerfile.pod, .dockerignore
+├── .github/workflows/      # builds the rented-GPU image on GitHub (no local Docker needed)
 ├── FOUNDRY.md              # Foundry deployment guide
+├── RENTING_A_GPU.md        # RunPod / Vast.ai guide
 ├── tools/                  # COLMAP Windows release (COLMAP.bat, bin/, lib/) - you add this
 ├── raw/                    # your equirectangular videos
 ├── work/                   # per-video working folders (incl. pipeline.log)
@@ -208,7 +215,7 @@ To **retrain from scratch** with new settings: `rmdir /s /q work\patio\train` fi
 | feature extraction (GPU) | ~3 min |
 | sequential matching (GPU) | ~8 min |
 | mapper: `colmap` incremental | ~2 h 20 min |
-| mapper: `colmap_global` | minutes, but hung on the 214-frame re-run |
+| mapper: `colmap_global` | minutes, but hung on the 214-frame re-run (`auto`, the default, tries it with a 20 min limit, then falls back to incremental) |
 | mapper: `mapanything` (hybrid) | MapAnything minutes + COLMAP triangulation/BA (expected well under the incremental mapper) |
 | training, 1M Gaussians, 30k steps | ~48 min, 2.2 GB VRAM |
 | training, 3M Gaussians | ~1.5–2 h (estimate) |
@@ -288,55 +295,53 @@ in `CONFIG_OVERRIDES`) - the transform publishes it as the next `_vN`.
 
 ### Uneven light, haze and shimmer
 
-- **Bilateral grids** (`train.custom.bilagrid`, on): every photo gets a small, smooth grid of
-  colour corrections over position and brightness. It absorbs what the scene shouldn't have
-  to explain - auto exposure, white-balance drift, warm window light next to blue dusk - so
-  the trainer stops averaging it into grey haze and floaters. The grids aren't exported: the
-  `.ply` holds the consistent colours, and the corrections are kept averaging to "no change"
-  so the splat can't drift to a tint the grids then undo (an early version did: purple
-  splats). `train_stats.json` → `heldout_psnr_raw` scores the splat without any
-  corrections - what viewers show; it should be close to `heldout_psnr`. About 0.4 GB of extra GPU memory for ~1300 photos.
+- **Per-photo exposure correction** (`train.custom.exposure`, on): one small colour/brightness
+  adjustment per photo soaks up the camera's auto exposure. Kept averaging to "no change", so
+  the `.ply` holds the true colours. `train_stats.json` → `heldout_psnr_raw` scores the splat
+  without any corrections (what viewers show); it should be close to `heldout_psnr`.
+- **Bilateral grids** (`train.custom.bilagrid`, **off**): local per-photo colour grids.
+  Tried and switched off: they let floaters near the camera hide behind per-photo
+  corrections, which show up as dark, purple-ish blobs in viewers.
 - **Anti-aliasing** (`train.custom.antialiased`, on): Mip-Splatting style filtering, so fine
   detail doesn't sparkle or thin out when you view from further away than the drone flew.
   Tick **Anti-aliased** in the viewer for these splats (untick it for older ones).
+- **Gaussian budget** (`train.custom.cap_max: auto`): follows GPU memory: 3M on 16 GB (T4),
+  4M on 24 GB (RTX 4090), 5M on 32 GB (RTX 5090), 6M on 48 GB+. Set a number to override.
 
-### AI fill-in with Difix3D+ (optional, separate step)
+### AI fill-in with NVIDIA Fixer
 
-What the real data can't show stays a hole or a smear. `difix_refine.py` fills it in after
-the fact, on a finished splat:
+What the real data can't show stays a hole or a smear. `fixer_refine.py` fills it in after
+the fact, on a finished splat (`pod_run.py` does this automatically after each video):
 
 1. re-cuts the exact training images from the video using the result's `scene/` bundle
    (poses, chosen frames, settings; published with every result),
-2. renders the splat from viewpoints the drone never had (off the path, between cube faces),
-3. NVIDIA **Difix** (a one-step diffusion model) cleans each render, guided by the real
-   photo that shows the most of the same surfaces (checked for occlusion, so a nearby photo
-   looking at a bush doesn't get picked),
+2. renders the splat from viewpoints the drone never had (off the path, turned between the
+   cube faces), at Fixer's native 1024x576,
+3. NVIDIA **Fixer** (Cosmos-Predict2 0.6B, single-step diffusion; the successor to Difix3D+)
+   cleans each render,
 4. keeps training on the real photos plus the cleaned views (weighted lower), over a few
    rounds that move further from the path, while nudging every Gaussian to be clearly solid
-   or gone (`opacity_entropy`), which clears the see-through haze.
+   or gone (`opacity_entropy`), which clears see-through haze.
 
-Before scoring, it re-fits the per-photo colour corrections with the splat frozen, so the
-"before" number is fair. After each round it scores held-out real photos; a round that
-lowers the score by more than `max_round_drop` is undone and the later (further-out) rounds
-are skipped, and the best round is what's saved (`kept_round`; 0 = Difix didn't help, the
-original splat is kept). `*_raw` scores are without per-photo corrections.
-`difix_stats.json` also reports `reference_overlap` (how much of each new view its reference
-photo shows) and `faint_share` (share of see-through Gaussians left).
+After each round it scores held-out real photos the way viewers see them (no per-photo
+corrections); a round that lowers that by more than `max_round_drop` is undone and the
+later (further-out) rounds are skipped. The best round is what's saved (`kept_round`;
+0 = Fixer didn't help and the original splat is kept).
 
-It runs in its own environment in the image (`/opt/difix`, built by default; `--build-arg
-WITH_DIFIX=0` leaves it out), started by `difix_fix.py`. Settings: `difix:` in
-`config.yaml`. On Foundry it's its own transform, `foundry_transform/difix_transform.py`,
-that reads the splats dataset and writes `<result>_difix/` into a separate dataset; see
-FOUNDRY.md A6.
+Output: `<name>_fixer/<name>_fixer.ply`, `fixer_stats.json` (scores before/after, per round)
+and `fixer_preview/roundR_kk_render_fixer_photo.jpg` (render | Fixer | the real photo that
+shows the most of the same surfaces). Settings: `fixer:` in `config.yaml`.
 
-Output: `<name>_difix.ply`, `difix_stats.json` (held-out PSNR on real photos before/after:
-expect it flat or slightly down - the gain is in views the drone never saw, so judge in the
-viewer) and `difix_preview/roundR_kk_render_difix_photo.jpg` (render | Difix | nearest real
-photo).
+It runs in its own environment in the image (`/opt/fixer`, built by `pod/install_fixer.sh`;
+`--build-arg WITH_FIXER=0` leaves it out), started by `fixer_fix.py`. It needs a bfloat16
+GPU: RTX 30xx/40xx/50xx, A100, H100, L4/L40S - not the T4, so on Foundry's T4 only the main
+pipeline runs. `selftest.py --with-fixer` (or `splat --selftest` on a pod) checks it.
+If NVIDIA Transformer Engine (Fixer's fast kernels) is unavailable on a GPU, it switches to
+an equivalent PyTorch path by itself and says so.
 
-**Licence:** Difix's code and weights are under the NVIDIA License, **non-commercial research
-and evaluation only**. The refined splat contains AI-generated content; keep the real-only
-one. For commercial work swap in NVIDIA Fixer (needs an Ampere-or-newer GPU, not a T4).
+**Licence:** Fixer's weights are under the NVIDIA Open Model License (commercial use
+allowed), its code under Apache-2.0. The refined splat contains AI-generated content; keep
+the real-only one.
 
 ### Faster, metric SfM: the MapAnything + COLMAP hybrid
 
@@ -432,7 +437,7 @@ lines become the up-direction agreement and the registered-views count. "Consist
 ---
 
 ### Self-test
-(`--with-difix` also loads and runs Difix; `--only-difix` checks just that.)
+(`--with-fixer` also loads and runs NVIDIA Fixer; `--only-fixer` checks just that.)
 
 `python selftest.py` checks ffmpeg, COLMAP, torch/CUDA/gsplat, the depth model and MapAnything,
 then runs the whole pipeline on a tiny synthetic 360 video (a few minutes on a GPU). Run it after
@@ -512,4 +517,4 @@ configuration, environment variables, troubleshooting).
 
 See **RENTING_A_GPU.md**: build the 5090 image once (`pod\build_5090.cmd`), start a pod,
 upload videos, run `splat`, download the results. Same pipeline and settings as Foundry;
-results are versioned the same way (`patio`, `patio_v2`, `patio_difix`, ...).
+results are versioned the same way (`patio`, `patio_v2`, `patio_fixer`, ...).

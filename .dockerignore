@@ -9,3 +9,11 @@
 !README.md
 !requirements-container.txt
 !mapanything_init.py
+!selftest.py
+!naming.py
+!scene_fill.py
+!difix_fix.py
+!difix_refine.py
+!appearance.py
+!pod_run.py
+!pod/start.sh

@@ -19,7 +19,10 @@ splats/
 ├── naming.py               # view layouts (cube map / custom), image naming, COLMAP rig config
 ├── scene_fill.py           # depth seeding, sky shell, floater cleanup (filling gaps, real data only)
 ├── appearance.py           # per-photo bilateral colour grids (off by default)
-├── scaffold.py             # flat floor/wall planes from SfM: exact depth + empty space in front
+├── scaffold.py             # scene surfaces: candidates, photo checks, outlines, training rules
+├── scaffold_agent.py       # Claude reviews the surfaces with tools and sets the rules
+├── scaffold_prompt.md      # Claude's instructions for that (override: /workspace/scaffold_prompt.md)
+├── retrain.py              # train again from a result's scene bundle (no camera solve)
 ├── fixer_refine.py         # AI fill-in on a finished splat with NVIDIA Fixer
 ├── fixer_fix.py            # runs Fixer itself (in /opt/fixer, the image's Fixer environment)
 ├── pod_run.py              # one command on a rented GPU: videos in, splats (+ Fixer) out
@@ -323,19 +326,49 @@ Four things aimed at the flicker and blobs you see when you move around a splat:
   under 1% of the scene and a fraction of a degree); the Fixer step reuses the same cameras.
 - **Less angle-dependent colour** (`sh_degree: 2`): less sparkle from angles the drone
   never flew, and it matches what web viewers show.
-- **Scene scaffold** (`scaffold`, needs the depth prior): finds the big flat surfaces
-  (floor, walls, fences) in the SfM points, rejecting bushes and trees (their points spread
-  through a thick slab instead of hugging a plane). Wherever a photo really shows one of
-  these surfaces (its depth prior agrees with the plane), training gets the exact plane depth
-  and **the space in front of it must stay empty**, which is the rule that stops floaters.
-  See `scaffold_topdown.jpg` (planes drawn over the point cloud from above) and
-  `scaffold.json`; the log lists every candidate it skipped and why. Turn it off with
-  `scaffold: false`, or keep the planes but drop the empty-space rule with
-  `scaffold_weight: 0`.
+- **Scene scaffold, built by Claude** (`scaffold`, needs the depth prior; see below).
 
 `flythrough.mp4` is a short video along the flight path, shifted slightly sideways, so the
 splat is seen from places no photo was taken. It shows popping and floaters that held-out
 scores and still images miss: compare it between runs.
+
+### Scene scaffold: Claude builds the scene's surfaces
+
+Before training, the pipeline finds 20-40 candidate flat surfaces in the SfM points (level,
+upright and sloped, split into connected pieces) and checks each one against every sampled
+photo's depth estimate: how much of it the photos agree is there, how much they see
+*through* it (glass), how much is hidden. Photo agreement also fills in each surface's real
+outline where a plain surface has few SfM points.
+
+Then **Claude reviews the candidates** (when the pod has an Anthropic API key). It sees a
+top-down map, photos along the flight and every candidate highlighted in its best photo, and
+works with tools: more views, zoom into any photo, trim / extend / split an outline using a
+region of a photo, merge pieces of the same surface, add surfaces the pipeline missed
+(glass is fitted to its frame, since depth sees through glass), then give each a rule:
+
+| rule | for | training |
+|---|---|---|
+| solid | paving, decking, walls, fences | exact depth where visible, nothing may float in front, splats lie flat |
+| glass | windows, glass doors | the same, placed from the outline; reflections become paint on the glass instead of blobs |
+| soft | grass, gravel, low planting | only the space well in front must stay empty; never flattened |
+| ignore | bushes, trees, furniture, anything uncertain | nothing |
+
+It then checks its own work on a review sheet before finishing. Undecided candidates keep
+the automatic rule (solid where the points or photos clearly say flat, else ignore), which is
+also what's used without a key or if anything goes wrong; a run never fails because of it.
+
+Outputs: `scaffold_review.jpg` (Claude's scaffold over photos and from above),
+`scaffold_topdown.jpg`, `scaffold_candidates.jpg`, `scaffold_agent_log.md` (what it did and
+why, with cost), `scaffold.json` (rules, stats and how often each surface's empty-space rule
+fired during training) and `scaffold_decision.json` (the full decision: re-runs and
+`--retrain` reuse it for free; edit a `rule` in it by hand to override Claude).
+
+Settings (`train.custom`): `scaffold_mode` (claude | auto), `scaffold_model`
+(claude-opus-5-5), `scaffold_max_cost` (USD cap per scene, default 3; the estimate uses
+`scaffold_price_in/out` per million tokens), `scaffold_weight` (empty space; 0 = off),
+`scaffold_flat_weight` (flat splats; 0 = off). Claude's instructions are in
+`scaffold_prompt.md`; put your own version at `/workspace/scaffold_prompt.md` to change them
+without rebuilding the image.
 
 ### AI fill-in with NVIDIA Fixer
 

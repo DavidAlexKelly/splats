@@ -7,6 +7,9 @@ One command for a rented GPU (RunPod, Vast.ai, or any Linux box with an NVIDIA G
     python /opt/app/pod_run.py patio.mp4           # just these videos
     python /opt/app/pod_run.py --no-fixer          # real-data splats only
     python /opt/app/pod_run.py --fixer-only patio_v2   # refine an existing result again
+    python /opt/app/pod_run.py --scaffold-only patio_v2  # Claude's scaffold only (minutes)
+    python /opt/app/pod_run.py --retrain patio_v2  # train again, skipping the camera solve
+    python /opt/app/pod_run.py --compare patio_v2 patio_v3  # side-by-side fly-through video
     python /opt/app/pod_run.py --selftest          # check the GPU, COLMAP, gsplat and Fixer first
     python /opt/app/pod_run.py --stop-when-done    # stop the pod at the end (stops the billing)
 
@@ -52,7 +55,9 @@ def say(msg: str):
 # --------------------------------------------------------------------------- helpers
 def code_hash() -> str:
     h = hashlib.sha256()
-    for f in sorted(APP.glob("*.py")) + sorted(APP.glob("*.yaml")):
+    for f in sorted(APP.glob("*.py")) + sorted(APP.glob("*.yaml")) + [APP / "scaffold_prompt.md"]:
+        if not f.exists():
+            continue
         if f.name == "pod_run.py":  # changes to this runner don't change the results
             continue
         h.update(f.name.encode())
@@ -164,23 +169,30 @@ def make_splat(video: Path, a, results: Path, work: Path, key: str) -> tuple[str
     return name, ok
 
 
-def refine(folder: str, a, results: Path, videos: Path, work: Path) -> tuple[str, bool]:
-    """Fixer refinement of an existing result folder."""
+def source_of(folder: str, results: Path, videos: Path, need_ply: bool = True):
+    """(result folder, its .ply, its scene bundle, the original video) for a finished result."""
     src = results / folder
     ply, scene = src / f"{folder}.ply", src / "scene"
-    if not ply.exists() or not (scene / "config.yaml").exists():
+    if (need_ply and not ply.exists()) or not (scene / "config.yaml").exists():
         raise SystemExit(f"{src} has no {ply.name} or scene/ folder (results made before the "
-                         "scene-bundle update can't be refined: run the video again)")
+                         "scene-bundle update can't be reused: run the video again)")
     info = json.loads((src / RUN_KEY).read_text()) if (src / RUN_KEY).exists() else {}
     vname = info.get("video") or ""
     video = videos / vname if vname else None
     if not video or not video.exists():
-        hits = [p for p in videos.iterdir() if p.stem == stem_of(folder)
-                and p.suffix.lower() in VIDEO_EXTS]
+        base = stem_of(folder)
+        hits = [p for p in videos.iterdir() if p.suffix.lower() in VIDEO_EXTS
+                and (p.stem == base or folder.startswith(p.stem + "_"))]
         if len(hits) != 1:
-            raise SystemExit(f"Can't find the video for {folder} in {videos} (Fixer re-cuts the "
-                             "training images from it)")
+            raise SystemExit(f"Can't find the video for {folder} in {videos} (the training "
+                             "images are re-cut from it)")
         video = hits[0]
+    return src, ply, scene, video
+
+
+def refine(folder: str, a, results: Path, videos: Path, work: Path) -> tuple[str, bool]:
+    """Fixer refinement of an existing result folder."""
+    src, ply, scene, video = source_of(folder, results, videos)
     key = run_key("fixer", folder, a.fixer_overrides)
     done = [p for p in published(results) if p.get("kind") == "fixer"
             and p.get("run_key") == key and p.get("status") == "ok"]
@@ -210,6 +222,130 @@ def refine(folder: str, a, results: Path, videos: Path, work: Path) -> tuple[str
          "finished": time.strftime("%Y-%m-%d %H:%M:%S")}, indent=2))
     say(f"{folder}: Fixer {'OK' if ok else 'FAILED'} -> {dest}")
     return name, ok
+
+
+def pick_decision(folder: str, a, results: Path) -> str:
+    """Which scaffold decision a retrain reuses: --decision, else the newest
+    <folder>_scaffold* result, else the folder's own. 'none' = decide afresh."""
+    if a.decision:
+        if a.decision.lower() == "none":
+            return ""
+        p = Path(a.decision)
+        if not p.is_absolute() and (results / a.decision).exists():
+            p = results / a.decision
+        if p.is_dir():
+            p = p / "scaffold_decision.json"
+        if not p.exists():
+            raise SystemExit(f"--decision: {p} not found")
+        return str(p)
+    cands = [p for p in published(results) if p.get("kind") == "scaffold"
+             and p.get("source") == folder and p.get("status") == "ok"]
+    for c in sorted(cands, key=lambda c: c.get("finished", ""), reverse=True):
+        f = results / c["folder"] / "scaffold_decision.json"
+        if f.exists():
+            return str(f)
+    own = results / folder / "scaffold_decision.json"
+    return str(own) if own.exists() else ""
+
+
+def scaffold_only(folder: str, a, results: Path, videos: Path, work: Path) -> tuple[str, bool]:
+    """Claude's scaffold for an existing result, without training (a few minutes)."""
+    src, _, scene, video = source_of(folder, results, videos, need_ply=False)
+    name = next_version(f"{folder}_scaffold", results)
+    dest = results / name
+    dest.mkdir(parents=True)
+    dwork = work / f"scaffold_{name}"
+    log = results / "_logs" / f"{name}_{time.strftime('%Y%m%d_%H%M%S')}.log"
+    code = stream([PY, APP / "retrain.py", "--video", video, "--scene", scene, "--out", dest,
+                   "--work", dwork, "--scaffold-only", "--overrides", json.dumps(a.overrides)],
+                  child_env(work), log)
+    ok = code == 0 and (dest / "scaffold_decision.json").exists()
+    if not ok:
+        (dest / "FAILED.txt").write_text(f"Scaffold for {folder} failed (exit code {code}). "
+                                         f"Full log: {log}\n")
+    shutil.copy2(log, dest / "run.log")
+    shutil.rmtree(dwork, ignore_errors=True)
+    (dest / RUN_KEY).write_text(json.dumps(
+        {"source": folder, "video": video.name, "kind": "scaffold", "overrides": a.overrides,
+         "status": "ok" if ok else "failed", "finished": time.strftime("%Y-%m-%d %H:%M:%S")},
+        indent=2))
+    say(f"{folder}: scaffold {'OK' if ok else 'FAILED'} -> {dest} (look at scaffold_review.jpg; "
+        f"'splat --retrain {folder}' trains with it)")
+    return name, ok
+
+
+def retrain(folder: str, a, results: Path, videos: Path, work: Path) -> tuple[str, bool]:
+    """Train again from a result's scene bundle (no frame extraction / camera solve)."""
+    src, _, scene, video = source_of(folder, results, videos, need_ply=False)
+    decision = pick_decision(folder, a, results)
+    dec_hash = hashlib.sha256(Path(decision).read_bytes()).hexdigest() if decision else ""
+    key = run_key("retrain", folder, a.overrides, dec_hash)
+    done = [p for p in published(results) if p.get("kind") == "splat" and p.get("source") == folder
+            and p.get("run_key") == key and p.get("status") == "ok"]
+    if done and not a.rerun:
+        say(f"{folder}: already retrained with these settings ({done[-1]['folder']}); "
+            "skipping (--rerun to redo)")
+        return done[-1]["folder"], True
+    stem = video.stem
+    name = next_version(stem, results)
+    dest = results / name
+    dest.mkdir(parents=True)
+    dwork = work / f"retrain_{name}"
+    log = results / "_logs" / f"{name}_{time.strftime('%Y%m%d_%H%M%S')}.log"
+    say(f"{folder}: retraining as {name}" + (f" with the scaffold in {decision}" if decision
+                                             else " (scaffold decided afresh)"))
+    env = child_env(work)
+    env["SPLAT_KEEP_WORK"] = "1"
+    code = stream([PY, APP / "retrain.py", "--video", video, "--scene", scene, "--out", dest,
+                   "--work", dwork, "--decision", decision, "--overrides", json.dumps(a.overrides)],
+                  env, log)
+    ok = code == 0 and (dest / f"{stem}.ply").exists()
+    if name != stem:
+        for f in list(dest.iterdir()):
+            if f.is_file() and f.stem == stem:
+                f.rename(dest / (name + f.suffix))
+    if not ok:
+        (dest / "FAILED.txt").write_text(f"Retraining {folder} failed (exit code {code}). "
+                                         f"Full log: {log}\n")
+    shutil.copy2(log, dest / "run.log")
+    shutil.rmtree(dwork, ignore_errors=True)
+    (dest / RUN_KEY).write_text(json.dumps(
+        {"video": video.name, "source": folder, "run_key": key, "kind": "splat", "retrain": True,
+         "decision": decision, "overrides": a.overrides, "status": "ok" if ok else "failed",
+         "finished": time.strftime("%Y-%m-%d %H:%M:%S")}, indent=2))
+    say(f"{folder}: retrain {'OK' if ok else 'FAILED'} -> {dest}")
+    return name, ok
+
+
+def compare(folders: list[str], results: Path) -> tuple[str, bool]:
+    """Side-by-side fly-through videos of two (or more) results."""
+    vids = []
+    for f in folders:
+        v = results / f / "flythrough.mp4"
+        if not v.exists():
+            raise SystemExit(f"{v} not found (results made before the fly-through update "
+                             "don't have one)")
+        vids.append(v)
+    out_dir = results / "_compare"
+    out_dir.mkdir(exist_ok=True)
+    out = out_dir / ("_vs_".join(folders) + ".mp4")
+    n = len(vids)
+    labels = "".join(
+        f"[{k}:v]scale=960:540,setsar=1,drawbox=x=0:y=0:w=iw:h=28:color=black@0.6:t=fill,"
+        f"drawtext=text='{f}':x=8:y=6:fontsize=18:fontcolor=white[v{k}];"
+        for k, f in enumerate(folders))
+    stack = "".join(f"[v{k}]" for k in range(n)) + f"hstack=inputs={n}:shortest=1[out]"
+    cmd = ["ffmpeg", "-y", "-loglevel", "error"]
+    for v in vids:
+        cmd += ["-i", str(v)]
+    base = cmd + ["-c:v", "libx264", "-crf", "20", "-pix_fmt", "yuv420p", "-map", "[out]", str(out)]
+    code = subprocess.run(cmd + ["-filter_complex", labels + stack] + base[len(cmd):]).returncode
+    if code != 0:  # no drawtext (fonts) in this ffmpeg: plain side by side
+        plain = "".join(f"[{k}:v]scale=960:540,setsar=1[v{k}];" for k in range(n)) + stack
+        code = subprocess.run(cmd + ["-filter_complex", plain] + base[len(cmd):]).returncode
+        say(f"(left to right: {', '.join(folders)})")
+    say(f"comparison {'written to ' + str(out) if code == 0 else 'FAILED'}")
+    return str(out), code == 0
 
 
 def stop_pod():
@@ -246,6 +382,16 @@ def main():
     ap.add_argument("--no-fixer", action="store_true", help="skip the Fixer AI fill-in")
     ap.add_argument("--fixer-only", nargs="+", metavar="FOLDER",
                     help="only refine these existing result folders with Fixer")
+    ap.add_argument("--scaffold-only", nargs="+", metavar="FOLDER", dest="scaffold_only",
+                    help="only build the scene scaffold (Claude) for these results, no training")
+    ap.add_argument("--retrain", nargs="+", metavar="FOLDER",
+                    help="train these results again from their scene bundle (skips the camera "
+                         "solve), reusing their newest scaffold decision")
+    ap.add_argument("--decision", default="",
+                    help="with --retrain: a scaffold_decision.json or result folder to use, "
+                         "or 'none' to let Claude decide afresh")
+    ap.add_argument("--compare", nargs="+", metavar="FOLDER",
+                    help="side-by-side fly-through video of these results")
     ap.add_argument("--overrides", type=json.loads, default={},
                     help='config.yaml overrides as JSON, e.g. \'{"train":{"custom":{"cap_max":5000000}}}\'')
     ap.add_argument("--fixer-overrides", type=json.loads, default={},
@@ -257,6 +403,10 @@ def main():
     a = ap.parse_args()
     for d in (a.videos, a.out, a.work):
         d.mkdir(parents=True, exist_ok=True)
+    if not (os.environ.get("ANTHROPIC_API_KEY") or Path("/workspace/.anthropic_key").is_file()) \
+            and not a.compare and not a.fixer_only:
+        say("note: ANTHROPIC_API_KEY isn't set, so the scaffold uses automatic rules instead "
+            "of Claude (add it to the pod's environment variables)")
     t0 = time.time()
     summary: list[str] = []
     failed = False
@@ -269,7 +419,27 @@ def main():
             shutil.rmtree(a.work / "selftest", ignore_errors=True)
             if code != 0:
                 raise SystemExit("Self-test failed (see above); nothing was processed.")
-        if a.fixer_only:
+        if a.compare:
+            if len(a.compare) < 2:
+                raise SystemExit("--compare needs two or more result folders")
+            out, ok = compare(a.compare, a.out)
+            summary.append(f"{'OK    ' if ok else 'FAILED'} {out}")
+            failed |= not ok
+        elif a.scaffold_only:
+            for folder in a.scaffold_only:
+                name, ok = scaffold_only(folder, a, a.out, a.videos, a.work)
+                summary.append(f"{'OK    ' if ok else 'FAILED'} {name}")
+                failed |= not ok
+        elif a.retrain:
+            for folder in a.retrain:
+                name, ok = retrain(folder, a, a.out, a.videos, a.work)
+                summary.append(f"{'OK    ' if ok else 'FAILED'} {name}")
+                failed |= not ok
+                if ok and not a.no_fixer:
+                    name2, ok2 = refine(name, a, a.out, a.videos, a.work)
+                    summary.append(f"{'OK    ' if ok2 else 'FAILED'} {name2}")
+                    failed |= not ok2
+        elif a.fixer_only:
             for folder in a.fixer_only:
                 name, ok = refine(folder, a, a.out, a.videos, a.work)
                 summary.append(f"{'OK    ' if ok else 'FAILED'} {name}")

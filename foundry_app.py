@@ -154,7 +154,9 @@ def result_files(video_stem: str, res: dict, out_dir: Path) -> list[tuple[Path, 
     extra = [wd / "pipeline.log", wd / "sfm_stats.json", wd / "train" / "train_stats.json",
              wd / "train" / "alignment.json", wd / "train" / "flythrough.mp4",
              wd / "train" / "scaffold.json", wd / "train" / "scaffold_topdown.jpg",
-             wd / "train" / "pose_adjust.json"]
+             wd / "train" / "pose_adjust.json", wd / "train" / "scaffold_decision.json",
+             wd / "train" / "scaffold_review.jpg", wd / "train" / "scaffold_candidates.jpg",
+             wd / "train" / "scaffold_agent_log.md"]
     for f in extra:
         if f.exists():
             files.append((f, f"{video_stem}/{f.name}"))

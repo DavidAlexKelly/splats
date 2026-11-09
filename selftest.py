@@ -181,6 +181,23 @@ def check_mapanything(cfg: dict):
     return "PASS", f"{name} loads"
 
 
+@check("claude")
+def check_claude(cfg: dict):
+    """The scene-scaffold agent: key present and the model answers (costs a fraction of a cent)."""
+    c = cfg["train"].get("custom") or {}
+    if not c.get("scaffold", True) or str(c.get("scaffold_mode", "claude")) != "claude":
+        return "SKIP", "scaffold_mode isn't claude"
+    import scaffold_agent
+    s = {"scaffold_model": c.get("scaffold_model", "claude-opus-5-5")}
+    client, why = scaffold_agent.make_client(s)
+    if client is None:
+        return "WARN", f"{why}: the scaffold will use automatic rules"
+    r = client.messages.create(model=s["scaffold_model"], max_tokens=5,
+                               messages=[{"role": "user", "content": "Reply with just OK"}])
+    text = "".join(getattr(b, "text", "") for b in r.content).strip()
+    return "PASS", f"{s['scaffold_model']} answered {text[:20]!r}"
+
+
 @check("fixer")
 def check_fixer(enabled: bool):
     if not enabled:
@@ -322,6 +339,8 @@ def check_mini_run(cfg: dict, work: Path, until: str | None, cpu_colmap: bool):
 
 # --------------------------------------------------------------------------- #
 HINTS = {
+    "claude": "The Anthropic API call failed: check ANTHROPIC_API_KEY (console.anthropic.com), "
+              "your credit, and train.custom.scaffold_model. Runs still work (automatic scaffold).",
     "environment": "Working folder not writable or low on disk. Set SPLAT_WORK to a bigger folder.",
     "tools": "ffmpeg/COLMAP missing or broken in the image: rebuild with the full Dockerfile.",
     "gpu": "No usable GPU. Locally: docker run --gpus all ...; in Foundry: check the GPU resource "
@@ -364,6 +383,7 @@ def main():
         gpu_ok = check_gpu() == "PASS"
         check_depth(cfg)
         check_mapanything(cfg)
+        check_claude(cfg)
         check_fixer(args.with_fixer)
     if args.quick:
         RESULTS.append(("mini_run", "SKIP", 0.0, "--quick"))

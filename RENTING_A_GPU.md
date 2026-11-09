@@ -105,6 +105,25 @@ Each time: **Search**, filter on RTX 5090 (or 4090), prefer high reliability and
 internet (upload speed matters for 8K videos), rent with your template. **Instances →
 Connect** gives the SSH command.
 
+## 3c. Claude for the scene scaffold (recommended)
+
+Claude reviews each scene's surfaces before training (see README, "Scene scaffold"). It
+needs an Anthropic API key: create one at console.anthropic.com (API keys), add some credit,
+and either
+- add it to your RunPod template as an environment variable `ANTHROPIC_API_KEY`
+  (Edit Template → Environment Variables), then start a new pod; or
+- on a running pod: `echo 'sk-ant-...' > /workspace/.anthropic_key` (kept on the volume).
+
+Each scene costs roughly $0.50-3, capped at `scaffold_max_cost` (default $3); the decision is
+saved, so re-runs and `--retrain` don't pay again. Without a key everything still works with
+automatic rules (the start-up banner and `splat` say which one is used).
+
+Cheapest way to try it on a result you already have: `splat --scaffold-only patio_v2`
+(a few minutes, no training), look at `patio_v2_scaffold/scaffold_review.jpg`, then
+`splat --retrain patio_v2 --no-fixer` trains with it (about 45 min instead of 2 hours).
+Note: results made before this update have no saved scaffold, and `--retrain` needs the
+original video in /workspace/videos (the training images are re-cut from it).
+
 ## 4. Upload, run, download
 
 From cmd on your PC, or Terminal on a Mac (replace the IP/port and paths):
@@ -123,6 +142,10 @@ Useful variations:
 splat patio.mp4                              # one video
 splat --no-fixer                             # real data only, no AI fill-in
 splat --fixer-only patio_v2                  # refine an existing result again
+splat --scaffold-only patio_v2               # just Claude's scaffold (minutes, ~$1): check it first
+splat --retrain patio_v2 --no-fixer          # train again, skipping the ~50 min camera solve
+splat --retrain patio_v2 --decision none     # ... with Claude deciding the scaffold afresh
+splat --compare patio_v2 patio_v3            # side-by-side fly-through: _compare/*.mp4
 splat --rerun                                # process again with unchanged settings
 splat --overrides '{"train":{"custom":{"cap_max":4000000}}}'   # fewer Gaussians if memory runs out
 splat --fixer-overrides '{"fixer":{"rounds":2}}'
@@ -133,7 +156,8 @@ Results, in `/workspace/splats` (never overwritten; re-runs become `patio_v2`, `
 patio/patio.ply              the splat (real data)
 patio/eval/*.jpg             photo vs splat comparisons; train_stats.json, pipeline.log, scene/
 patio/flythrough.mp4         video along a slightly shifted path: the quickest way to judge popping
-patio/scaffold_topdown.jpg   the flat surfaces it found (floor green, walls blue) from above
+patio/scaffold_review.jpg    Claude's scaffold over photos + from above (solid green, glass blue, soft yellow)
+patio/scaffold_agent_log.md  what Claude did and why, and what it cost
 patio_fixer/patio_fixer.ply  the AI-filled version; fixer_stats.json, fixer_preview/*.jpg
 _logs/                       full logs of every run
 ```

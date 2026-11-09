@@ -15,7 +15,10 @@
 !fixer_fix.py
 !fixer_refine.py
 !appearance.py
+!scaffold.py
+!scaffold_agent.py
+!scaffold_prompt.md
+!retrain.py
 !pod_run.py
 !pod/start.sh
 !pod/install_fixer.sh
-!scaffold.py

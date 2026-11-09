@@ -17,8 +17,11 @@ touch /root/.ssh/authorized_keys && chmod 600 /root/.ssh/authorized_keys
 ssh-keygen -A >/dev/null 2>&1
 if /usr/sbin/sshd; then echo "SSH server started"; else echo "WARNING: sshd failed to start"; fi
 # Make the image's environment visible to SSH sessions too (sshd starts them clean).
-env | grep -E '^(PATH|HF_|TORCH_|SPLAT_|COLMAP_BIN|RUNPOD_|CONTAINER_|NVIDIA_|LD_LIBRARY_PATH)' \
+env | grep -E '^(PATH|HF_|TORCH_|SPLAT_|COLMAP_BIN|RUNPOD_|CONTAINER_|NVIDIA_|LD_LIBRARY_PATH|ANTHROPIC_)' \
     | sed 's/^/export /; s/=\(.*\)$/="\1"/' > /etc/profile.d/splat_env.sh
+chmod 600 /etc/profile.d/splat_env.sh  # may hold your Anthropic API key
+if [ -n "${ANTHROPIC_API_KEY:-}" ]; then echo "Claude scaffold: API key found"; else
+    echo "NOTE: no ANTHROPIC_API_KEY: the scaffold uses automatic rules (see RENTING_A_GPU.md)"; fi
 
 nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader 2>/dev/null \
     || echo "WARNING: no GPU visible (nvidia-smi failed)"

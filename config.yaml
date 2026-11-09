@@ -129,10 +129,16 @@ train:
     pose_opt: true             # small per-frame camera correction (sharper edges, fewer ghosts)
     pose_lr: 1.0e-5
     pose_opt_start: 1000
-    scaffold: true             # flat floor/wall planes from SfM: exact depth + empty space in front
-    scaffold_weight: 0.05      # empty-space penalty (0 = planes only guide depth)
+    # Scene scaffold: floor/walls/glass with a rule each. Claude decides when the pod has
+    # ANTHROPIC_API_KEY set (about $0.50-3 per scene, capped), else automatic rules.
+    scaffold: true
+    scaffold_mode: claude      # claude | auto
+    scaffold_model: claude-opus-5-5
+    scaffold_max_cost: 3.0     # USD per scene (estimated); the agent stops when reached
+    scaffold_weight: 0.05      # empty space in front of surfaces (0 = off)
+    scaffold_flat_weight: 0.02 # splats lie flat on solid/glass surfaces (0 = off)
     scaffold_margin: 0.03
-    scaffold_max_planes: 8
+    scaffold_soft_margin: 0.15
     flythrough: true           # train/flythrough.mp4: a video along a slightly shifted path
     flythrough_offset: 0.03
     test_every: 20       # hold out every 20th image to score quality honestly (0 = off)

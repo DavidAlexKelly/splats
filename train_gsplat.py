@@ -86,22 +86,43 @@ DEFAULTS = {
     "pose_lr": 1e-5,
     "pose_reg": 1e-6,
     "pose_opt_start": 1000,
-    # Scene scaffold (scaffold.py): flat floor/wall planes from the SfM points; where a plane is
-    # what the photo shows, its exact depth guides training and the space in front of it must
-    # stay empty (kills floaters).
+    # Scene scaffold (scaffold.py, scaffold_agent.py): the big surfaces (floor, walls, glass)
+    # with a rule each. solid: exact depth + empty space in front + flat splats; glass: the
+    # same, placed from its outline (depth sees through glass); soft (grass): only the space
+    # well in front must stay empty. Claude decides the rules when ANTHROPIC_API_KEY is set,
+    # otherwise automatic rules.
     "scaffold": True,
+    "scaffold_mode": "claude",     # claude (falls back to auto without a key) | auto
+    "scaffold_decision": "",       # reuse a saved scaffold_decision.json (edit it to override)
+    "scaffold_redo": False,        # ignore this run's own saved decision (after a restart)
+    "scaffold_model": "claude-opus-5-5",
+    "scaffold_max_cost": 3.0,      # USD, estimated from tokens; stops the agent when reached
+    "scaffold_max_turns": 40,
+    "scaffold_thinking": 6000,     # extended-thinking budget per turn (0 = off)
+    "scaffold_price_in": 5.0,      # USD per million input tokens (for the estimate only)
+    "scaffold_price_out": 25.0,    # USD per million output tokens
+    "scaffold_prompt": "",         # custom instructions file (default: scaffold_prompt.md)
     "scaffold_tol": 0.01,          # plane thickness, x typical camera-to-surface distance
-    "scaffold_min_frac": 0.02,     # a plane needs >= this share of all SfM points
-    "scaffold_max_tilt_deg": 10,   # only horizontal / vertical planes
-    "scaffold_max_planes": 8,
-    "scaffold_ransac_iters": 400,
+    "scaffold_cell": 0.015,        # outline cell size, x the same distance
+    "scaffold_candidates": 40,     # how many candidate surfaces to look for
+    "scaffold_cand_min_frac": 0.002,  # a candidate needs >= this share of the SfM points
+    "scaffold_ransac_iters": 300,
+    "scaffold_max_tilt_deg": 10,   # within this of level = floor/ceiling, of upright = wall
+    "scaffold_check_images": 48,   # photos used to check candidates against depth
+    "scaffold_check_step": 8,      # ... sampled every 8 pixels
+    "scaffold_min_views": 3,       # photos that must confirm a surface (automatic rules)
+    "scaffold_min_area": 0.005,    # x (typical distance)^2 (automatic rules)
     "scaffold_min_concentration": 0.5,  # share of nearby points ON the plane (bush ~0.25)
-    "scaffold_min_occupancy": 0.25,
-    "scaffold_res_step": 4,        # plane depth computed at 1/4 resolution
-    "scaffold_agree": 0.05,        # depth prior within 5% of the plane = plane is visible
-    "scaffold_conf": 1.0,          # depth-prior weight on visible plane pixels
+    "scaffold_photo_min": 0.5,     # share of photo depth agreeing with the plane
+    "scaffold_res_step": 4,        # surface depth computed at 1/4 resolution in training
+    "scaffold_agree": 0.05,        # depth estimate within 5% of a surface = it's visible
+    "scaffold_conf": 1.0,          # depth weight on visible solid/glass pixels
     "scaffold_weight": 0.05,       # empty-space penalty weight (constant through training)
-    "scaffold_margin": 0.03,       # in front of a plane by more than 3% counts as a floater
+    "scaffold_margin": 0.03,       # solid/glass: >3% in front of the surface = floater
+    "scaffold_soft_margin": 0.15,  # soft: >15% in front = floater (grass keeps its height)
+    "scaffold_flat_weight": 0.02,  # flat splats on solid/glass surfaces (0 = off)
+    "scaffold_flat_start": 2000,
+    "scaffold_flat_every": 100,    # re-find which splats lie on a surface every N steps
     # A short video along the flight path, shifted slightly sideways: shows popping/floaters
     # that a still image or the held-out score can't.
     "flythrough": True,
@@ -319,6 +340,7 @@ class ColmapDataset:
             raise ValueError("COLMAP model has no images or no points")
 
         self.alignment, self.align_stats = None, None
+        self.align_up = up_axis
         if align:
             M, st = (compute_alignment(images, views, up_axis, world_scale) if views
                      else (None, {"error": "no view list (intrinsics.json or config slice.views)"}))
@@ -356,6 +378,9 @@ class ColmapDataset:
                 "obs_uv": im["obs_xy"][keep],
                 "obs_pidx": np.array([id_to_idx[int(im["obs_id"][k])] for k in keep], np.int64),
             })
+        if sum(len(f["obs_pidx"]) for f in self.frames) == 0:
+            # a scene bundle keeps poses but not which points each photo saw: estimate it
+            pseudo_observations(self.frames, self.points)
         centers = np.array([f["center"] for f in self.frames])
         radius = float(np.max(np.linalg.norm(centers - centers.mean(0), axis=1)))
         self.scene_scale = radius * 1.1 if radius > 0 else 1.0
@@ -364,13 +389,16 @@ class ColmapDataset:
         self.scaffold = None   # set by train() when scaffold planes were found
         self.scaffold_conf = 1.0
 
+    def load_prior_raw(self, i: int):
+        return depth_prior.load(self.prior_dir, self.frames[i]["name"])
+
     def load_prior_full(self, i: int):
-        """(depth, weight, plane_depth or None) or None."""
+        """(depth, weight, limit or None, surface ids or None) or None."""
         p = depth_prior.load(self.prior_dir, self.frames[i]["name"])
         if p is None:
             return None
         if self.scaffold is None:
-            return (p[0], p[1], None)
+            return (p[0], p[1], None, None)
         return self.scaffold.merge_prior(self.frames[i], p[0], p[1], self.scaffold_conf)
 
     def load_prior(self, i: int):
@@ -401,6 +429,36 @@ class ColmapDataset:
             if self.cache is not None:
                 self.cache[i] = (img, mask)
         return img, mask
+
+
+def pseudo_observations(frames: list, points: np.ndarray, cell: int = 16):
+    """Which SfM points each photo (probably) saw, from projection: per 16-px cell, the
+    points within 3% of the nearest one. Used when the 2D observations were stripped."""
+    P = np.asarray(points, np.float64)
+    t0 = time.time()
+    for f in frames:
+        K, V = f["K"].astype(np.float64), f["viewmat"].astype(np.float64)
+        Xc = P @ V[:3, :3].T + V[:3, 3]
+        z = Xc[:, 2]
+        front = z > 1e-6
+        with np.errstate(divide="ignore", invalid="ignore"):
+            x = K[0, 0] * Xc[:, 0] / z + K[0, 2]
+            y = K[1, 1] * Xc[:, 1] / z + K[1, 2]
+        ok = front & (x >= 0) & (x < f["W"]) & (y >= 0) & (y < f["H"])
+        idx = np.nonzero(ok)[0]
+        if len(idx) == 0:
+            continue
+        cx, cy = (x[idx] // cell).astype(np.int64), (y[idx] // cell).astype(np.int64)
+        key = cy * (f["W"] // cell + 1) + cx
+        zmin = np.full(key.max() + 1, np.inf)
+        np.minimum.at(zmin, key, z[idx])
+        vis = z[idx] <= zmin[key] * 1.03
+        keep = idx[vis]
+        sx, sy = f["src_w"] / f["W"], f["src_h"] / f["H"]  # obs are at source resolution
+        f["obs_uv"] = np.stack([x[keep] * sx, y[keep] * sy], 1)
+        f["obs_pidx"] = keep.astype(np.int64)
+    log.info("Estimated which points each photo saw (%d photos, %.0f s)", len(frames),
+             time.time() - t0)
 
 
 class Prefetcher:
@@ -557,6 +615,36 @@ def depth_loss(rend_depth, prior_depth, weight, valid, grad_weight: float):
     return l_abs + grad_weight * l_grad
 
 
+def scaffold_up(ds) -> np.ndarray:
+    return (TARGET_AXES[ds.align_up][0].astype(np.float64) if ds.alignment is not None
+            else np.array([0, -1.0, 0]))  # unaligned: COLMAP's first camera, y down
+
+
+def build_scaffold(ds, data_dir: Path, out_dir: Path, s: dict, train_idx: list[int],
+                   use_depth: bool, client=None) -> dict:
+    """Decide the scaffold (Claude or automatic) and attach it to the dataset."""
+    if not s["scaffold"]:
+        return {"enabled": False}
+    if not (use_depth and ds.prior_dir is not None):
+        log.info("Scaffold skipped: it needs the depth prior (to see where surfaces are visible)")
+        return {"enabled": False, "why": "no depth prior"}
+    try:
+        import scaffold_agent
+        surfaces, info = scaffold_agent.build(
+            ds, s, out_dir, ds.load_prior_raw, train_idx, scaffold_up(ds),
+            scene_name=str(s.get("_scene_name") or data_dir.name), client=client)
+        live = scaffold_mod.Scaffold(surfaces, s)
+        if len(live):
+            ds.scaffold = live
+            ds.scaffold_conf = float(s["scaffold_conf"])
+        ds.scaffold_all = surfaces
+        return {"enabled": bool(len(live)), **info}
+    except Exception as e:  # an optional extra: never lose a run over it
+        log.warning("Scaffold skipped: %s: %s", type(e).__name__, e)
+        ds.scaffold = None
+        return {"enabled": False, "error": f"{type(e).__name__}: {e}"}
+
+
 def train(data_dir: Path, out_dir: Path, s: dict):
     import torch
     import torch.nn.functional as F
@@ -613,28 +701,8 @@ def train(data_dir: Path, out_dir: Path, s: dict):
              "scene scale %.3f", len(ds), ds.frames[0]["W"], ds.frames[0]["H"],
              len(train_idx), len(test_idx), len(ds.points), ds.scene_scale)
 
-    # ---- scaffold: flat surfaces as geometric rules ------------------------
-    scaffold_info: dict = {"enabled": False}
-    if s["scaffold"] and use_depth and ds.prior_dir is not None:
-        try:
-            up = (TARGET_AXES[s["up_axis"]][0].astype(np.float64) if ds.alignment is not None
-                  else np.array([0, -1.0, 0]))
-            centres = np.array([f["center"] for f in ds.frames])
-            planes = scaffold_mod.detect_planes(ds.points, up, centres, ds.scene_scale, s,
-                                                seed=int(s["seed"]))
-            scaffold_mod.save_report(planes, ds.points, centres, up, out_dir)
-            if planes:
-                ds.scaffold = scaffold_mod.Scaffold(planes, s)
-                ds.scaffold_conf = float(s["scaffold_conf"])
-            scaffold_info = {"enabled": bool(planes), "planes": [
-                {k: p[k] for k in ("label", "points", "area", "concentration", "occupancy")}
-                for p in planes]}
-        except Exception as e:  # an optional extra: never lose a run over it
-            log.warning("Scaffold skipped: %s: %s", type(e).__name__, e)
-            ds.scaffold = None
-            scaffold_info = {"enabled": False, "error": f"{type(e).__name__}: {e}"}
-    elif s["scaffold"]:
-        log.info("Scaffold skipped: it needs the depth prior (to see where a plane is visible)")
+    # ---- scaffold: the big surfaces as geometric rules ----------------------
+    scaffold_info = build_scaffold(ds, data_dir, out_dir, s, train_idx, use_depth)
 
     # ---- model ------------------------------------------------------------
     sh_degree = int(s["sh_degree"])
@@ -735,6 +803,12 @@ def train(data_dir: Path, out_dir: Path, s: dict):
                  n, len(pts), len(seed_pts), n_sky)
 
     optimizers = make_optimizers(splats)
+    flat = (scaffold_mod.FlatTerm(ds.scaffold, device)
+            if ds.scaffold is not None and float(s["scaffold_flat_weight"]) > 0 else None)
+    n_surf = len(ds.scaffold) if ds.scaffold is not None else 0
+    surf_vis = torch.zeros(max(n_surf, 1), dtype=torch.float64, device=device)
+    surf_bad = torch.zeros(max(n_surf, 1), dtype=torch.float64, device=device)
+    flat_members = 0
     scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizers["means"], gamma=0.01 ** (1.0 / iters))
     strategy.check_sanity(splats, optimizers)
     try:
@@ -935,12 +1009,25 @@ def train(data_dir: Path, out_dir: Path, s: dict):
                 loss = loss + lam_d * d_loss
                 depth_acc += float(d_loss.detach())
                 depth_n += 1
-                if len(prior) > 2 and prior[2] is not None and float(s["scaffold_weight"]) > 0:
-                    sd = torch.from_numpy(prior[2]).to(device, non_blocking=True)
+                if prior[2] is not None and float(s["scaffold_weight"]) > 0:
+                    lim = torch.from_numpy(prior[2]).to(device, non_blocking=True)
                     if mask is not None:
-                        sd = sd * torch.from_numpy(mask).to(device)
-                    loss = loss + float(s["scaffold_weight"]) * scaffold_mod.free_space_loss(
-                        renders[0, ..., 3], sd, float(s["scaffold_margin"]))
+                        lim = lim * torch.from_numpy(mask).to(device)
+                    rd = renders[0, ..., 3]
+                    loss = loss + float(s["scaffold_weight"]) * scaffold_mod.free_space_loss(rd, lim)
+                    if step % 10 == 0:  # how often each surface's empty-space rule fires
+                        with torch.no_grad():
+                            sid = torch.from_numpy(prior[3]).to(device).long()
+                            on = (lim > 0) & (sid < 255)
+                            ids_on = sid[on]
+                            surf_vis += torch.bincount(ids_on, minlength=n_surf)[:n_surf].double()
+                            bad = (rd.detach()[on] < lim[on])
+                            surf_bad += torch.bincount(ids_on[bad], minlength=n_surf)[:n_surf].double()
+            if flat is not None and step >= int(s["scaffold_flat_start"]):
+                if flat.n_at != len(splats["means"]) or step % int(s["scaffold_flat_every"]) == 0:
+                    flat_members = flat.refresh(splats["means"].detach())
+                loss = loss + float(s["scaffold_flat_weight"]) * flat.loss(
+                    splats["quats"], splats["scales"])
 
             strategy.step_pre_backward(params=splats, optimizers=optimizers, state=state,
                                        step=step, info=info)
@@ -1048,6 +1135,25 @@ def train(data_dir: Path, out_dir: Path, s: dict):
              "frames": {k: mats[j].tolist() for j, k in enumerate(uniq)}}))
         log.info("Camera refinement: mean shift %.3f%% of scene, mean turn %.3f deg",
                  pose_info["translation_mean_pct_scene"], pose_info["rotation_mean_deg"])
+    if ds.scaffold is not None:
+        vis_np, bad_np = surf_vis.cpu().numpy(), surf_bad.cpu().numpy()
+        for k, srf in enumerate(ds.scaffold.surfaces):
+            srf["usage"] = {"pixels_checked": int(vis_np[k]),
+                            "share_in_front": round(float(bad_np[k] / max(vis_np[k], 1)), 5)}
+        scaffold_info["flat_splats"] = int(flat_members)
+        scaffold_info["usage"] = [{"id": x["id"], "rule": x["rule"], **x["usage"]}
+                                  for x in ds.scaffold.surfaces]
+        try:
+            centres = np.array([f["center"] for f in ds.frames])
+            scaffold_mod.save_report(ds.scaffold_all, ds.points, centres, scaffold_up(ds),
+                                     out_dir, {"source": scaffold_info.get("source"),
+                                               "agent": scaffold_info.get("agent"),
+                                               "flat_splats": int(flat_members)})
+        except Exception as e:  # noqa: BLE001
+            log.warning("Couldn't update the scaffold report: %s", e)
+        log.info("Scaffold at the end: %d splats lie flat on surfaces; empty-space rule still "
+                 "violated on %.2f%% of checked pixels", flat_members,
+                 100 * float(bad_np[:n_surf].sum() / max(vis_np[:n_surf].sum(), 1)))
     with torch.no_grad():
         opa = torch.sigmoid(splats["opacities"])
         faint_share = round(float(((opa > 0.005) & (opa < 0.3)).float().mean()), 4)
@@ -1267,6 +1373,23 @@ def depth_preview(data_dir: Path, s: dict):
     log.info("Preview images (photo | aligned prior | weight, white = supervised): %s", out)
 
 
+def scaffold_only(data_dir: Path, out_dir: Path, s: dict) -> dict:
+    """Just the scaffold step (depth priors + candidates + Claude), no training."""
+    s = dict(s, depth_prior=True, scaffold=True)
+    views = None
+    intr_file = data_dir / "intrinsics.json"
+    if intr_file.exists():
+        views = json.loads(intr_file.read_text()).get("views")
+    views = views or s.get("_views")
+    ds = ColmapDataset(data_dir, downscale=s["downscale"], align=bool(s["align"]), views=views,
+                       up_axis=s["up_axis"], world_scale=float(s["world_scale"]))
+    train_idx, _, _ = split_train_test(ds, int(s["test_every"]))
+    depth_prior.prepare(ds, data_dir, s, train_idx)
+    info = build_scaffold(ds, data_dir, out_dir, s, train_idx, True)
+    (out_dir / "scaffold_info.json").write_text(json.dumps(info, indent=2, default=str))
+    return info
+
+
 def self_check():
     import torch
     log.info("torch %s, CUDA build %s", torch.__version__, torch.version.cuda)
@@ -1313,6 +1436,8 @@ def main():
                     help="report how self-consistent the COLMAP model is (no GPU needed)")
     ap.add_argument("--depth-preview", action="store_true", dest="depth_preview",
                     help="compute depth priors only and save photo|prior|weight images")
+    ap.add_argument("--scaffold-only", action="store_true", dest="scaffold_only",
+                    help="build the scene scaffold only (Claude or automatic) into --out")
     args = ap.parse_args()
 
     try:
@@ -1331,6 +1456,11 @@ def main():
             return
         if not args.data or not args.out:
             ap.error("--data and --out are required (or use --check / --inspect)")
+        if args.scaffold_only:
+            args.out.mkdir(parents=True, exist_ok=True)
+            scaffold_only(args.data.resolve(), args.out.resolve(),
+                          load_settings(args.config or None, {}))
+            return
         overrides = {k: getattr(args, k) for k in ("iterations", "strategy", "cap_max",
                                                     "downscale", "sh_degree")}
         settings = load_settings(args.config or None, overrides)

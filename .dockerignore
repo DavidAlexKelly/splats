@@ -18,3 +18,4 @@
 !pod_run.py
 !pod/start.sh
 !pod/install_fixer.sh
+!scaffold.py

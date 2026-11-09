@@ -63,7 +63,8 @@ sfm:
   # Incremental is the proven default. With rig: true, colmap_global is worth trying: it was
   # unreliable on the 2,782 independent images of the first patio run, but a rig turns that
   # into ~214 frame poses.
-  mapper: auto
+  mapper: colmap        # "auto" tried the global mapper first, but on patio it needed >20 min and
+                        # the incremental fallback still took ~50: the plain incremental is quicker overall
   auto_min_registered: 0.9
   auto_global_timeout_min: 20    # "auto": give up on the global mapper after this long
   glomap_bin: glomap
@@ -104,7 +105,7 @@ train:
   custom:
     strategy: mcmc       # mcmc keeps a fixed Gaussian budget, so VRAM use is predictable
     cap_max: auto        # Gaussian budget from GPU memory: 3M (16 GB) / 4M (24 GB) / 5M (32 GB) / 6M
-    sh_degree: 3
+    sh_degree: 2         # angle-dependent colour; 2 = less sparkle off the flight path
     downscale: 1         # 2 = train at half resolution (~4x less memory per image)
     ssim_lambda: 0.2
     random_background: false
@@ -123,6 +124,17 @@ train:
     bilagrid: false      # per-photo local colour grids. Off: they let floaters hide (dark blobs)
     bilagrid_tv: 10.0    # smoothness of those corrections (higher = gentler)
     antialiased: true    # Mip-Splatting style anti-aliasing (tick "Anti-aliased" in the viewer)
+    opacity_entropy: 0.002     # late in training: every Gaussian solid or gone (less popping)
+    opacity_entropy_start: 0.6
+    pose_opt: true             # small per-frame camera correction (sharper edges, fewer ghosts)
+    pose_lr: 1.0e-5
+    pose_opt_start: 1000
+    scaffold: true             # flat floor/wall planes from SfM: exact depth + empty space in front
+    scaffold_weight: 0.05      # empty-space penalty (0 = planes only guide depth)
+    scaffold_margin: 0.03
+    scaffold_max_planes: 8
+    flythrough: true           # train/flythrough.mp4: a video along a slightly shifted path
+    flythrough_offset: 0.03
     test_every: 20       # hold out every 20th image to score quality honestly (0 = off)
     eval_every: 5000     # how often to print the held-out score
 

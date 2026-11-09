@@ -19,6 +19,7 @@ splats/
 ├── naming.py               # view layouts (cube map / custom), image naming, COLMAP rig config
 ├── scene_fill.py           # depth seeding, sky shell, floater cleanup (filling gaps, real data only)
 ├── appearance.py           # per-photo bilateral colour grids (off by default)
+├── scaffold.py             # flat floor/wall planes from SfM: exact depth + empty space in front
 ├── fixer_refine.py         # AI fill-in on a finished splat with NVIDIA Fixer
 ├── fixer_fix.py            # runs Fixer itself (in /opt/fixer, the image's Fixer environment)
 ├── pod_run.py              # one command on a rented GPU: videos in, splats (+ Fixer) out
@@ -307,6 +308,34 @@ in `CONFIG_OVERRIDES`) - the transform publishes it as the next `_vN`.
   Tick **Anti-aliased** in the viewer for these splats (untick it for older ones).
 - **Gaussian budget** (`train.custom.cap_max: auto`): follows GPU memory: 3M on 16 GB (T4),
   4M on 24 GB (RTX 4090), 5M on 32 GB (RTX 5090), 6M on 48 GB+. Set a number to override.
+
+### Popping, floaters and ghosting
+
+Four things aimed at the flicker and blobs you see when you move around a splat:
+
+- **Solid or gone** (`opacity_entropy`, from 60% of training): pushes every Gaussian to be
+  clearly opaque or clearly invisible. Thin see-through layers are what "pop" as a viewer
+  re-sorts them. `train_stats.json` → `faint_share` is the share still see-through (lower is
+  better; it was ~37% before this).
+- **Camera refinement** (`pose_opt`): one tiny correction per 360 frame, shared by its six
+  cube faces so the rig stays rigid. Fixes slight pose errors that show as doubled edges and
+  ghosts. `train_stats.json` → `pose_refine` says how much the cameras moved (normally well
+  under 1% of the scene and a fraction of a degree); the Fixer step reuses the same cameras.
+- **Less angle-dependent colour** (`sh_degree: 2`): less sparkle from angles the drone
+  never flew, and it matches what web viewers show.
+- **Scene scaffold** (`scaffold`, needs the depth prior): finds the big flat surfaces
+  (floor, walls, fences) in the SfM points, rejecting bushes and trees (their points spread
+  through a thick slab instead of hugging a plane). Wherever a photo really shows one of
+  these surfaces (its depth prior agrees with the plane), training gets the exact plane depth
+  and **the space in front of it must stay empty**, which is the rule that stops floaters.
+  See `scaffold_topdown.jpg` (planes drawn over the point cloud from above) and
+  `scaffold.json`; the log lists every candidate it skipped and why. Turn it off with
+  `scaffold: false`, or keep the planes but drop the empty-space rule with
+  `scaffold_weight: 0`.
+
+`flythrough.mp4` is a short video along the flight path, shifted slightly sideways, so the
+splat is seen from places no photo was taken. It shows popping and floaters that held-out
+scores and still images miss: compare it between runs.
 
 ### AI fill-in with NVIDIA Fixer
 

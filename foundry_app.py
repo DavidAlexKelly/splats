@@ -152,7 +152,9 @@ def result_files(video_stem: str, res: dict, out_dir: Path) -> list[tuple[Path, 
             files.append((f, f"{video_stem}/{f.name}"))
     wd = Path(res.get("work_dir") or "")
     extra = [wd / "pipeline.log", wd / "sfm_stats.json", wd / "train" / "train_stats.json",
-             wd / "train" / "alignment.json"]
+             wd / "train" / "alignment.json", wd / "train" / "flythrough.mp4",
+             wd / "train" / "scaffold.json", wd / "train" / "scaffold_topdown.jpg",
+             wd / "train" / "pose_adjust.json"]
     for f in extra:
         if f.exists():
             files.append((f, f"{video_stem}/{f.name}"))

@@ -281,6 +281,9 @@ def refine(data_dir: Path, ply: Path, out_dir: Path, s: dict, d: dict) -> dict:
     views = json.loads((data_dir / "intrinsics.json").read_text())["views"]
     ds = tg.ColmapDataset(data_dir, downscale=float(s["downscale"]), align=bool(s["align"]),
                           views=views, up_axis=s["up_axis"], world_scale=float(s["world_scale"]))
+    if s.get("_pose_adjust"):
+        n_adj = tg.apply_pose_adjust(ds, Path(s["_pose_adjust"]))
+        log.info("Applied the trainer's camera refinement to %d images", n_adj)
     train_idx, test_idx, expo_src = tg.split_train_test(ds, int(s["test_every"]))
     up = (tg.TARGET_AXES[s["up_axis"]][0].astype(np.float64) if ds.alignment is not None
           else np.array([0, -1.0, 0]))  # unaligned: COLMAP's first camera, y down
@@ -593,6 +596,8 @@ def main():
     # Per-photo local colour grids let floaters hide behind corrections: never use them here,
     # even when an older bundle's config turned them on.
     s["bilagrid"] = False
+    if (args.scene / "pose_adjust.json").exists():  # the trainer's refined cameras
+        s["_pose_adjust"] = str(args.scene / "pose_adjust.json")
     d = {**FIXER_DEFAULTS, **(cfg.get("fixer") or {})}
     data_dir = rebuild_images(args.video, args.scene, args.work, cfg)
     stats = refine(data_dir, args.ply, args.out, s, d)

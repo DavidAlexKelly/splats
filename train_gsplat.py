@@ -37,6 +37,7 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import appearance  # noqa: E402
+import scaffold as scaffold_mod  # noqa: E402
 import depth_prior  # noqa: E402
 import naming  # noqa: E402
 import scene_fill  # noqa: E402
@@ -47,7 +48,8 @@ DEFAULTS = {
     "iterations": 30000,
     "strategy": "mcmc",          # "mcmc" (fixed Gaussian budget, predictable VRAM) or "default"
     "cap_max": 1_000_000,        # MCMC: max number of Gaussians. ~1M fits an 8 GB GPU comfortably
-    "sh_degree": 3,              # view-dependent colour detail (0-3)
+    "sh_degree": 2,              # view-dependent colour detail (0-3). 2: less sparkle from
+                                 # angles the drone never had, matches viewers' top setting
     "sh_degree_interval": 1000,  # add one SH band every N steps
     "downscale": 1,              # train on images downscaled by this factor
     "ssim_lambda": 0.2,
@@ -74,6 +76,36 @@ DEFAULTS = {
     "bilagrid_lr": 2e-3,
     "bilagrid_tv": 10.0,         # smoothness: the grids may only make gentle, broad changes
     "antialiased": True,         # Mip-Splatting style anti-aliasing: less shimmer off the path
+    # Solid-or-gone: late in training, push every Gaussian to clearly opaque or invisible.
+    # Thin see-through layers are what flickers ("pops") as a viewer re-sorts them.
+    "opacity_entropy": 0.002,
+    "opacity_entropy_start": 0.6,  # fraction of training before it starts (ramps in over 10%)
+    # Camera refinement: one small pose correction per 360 frame (shared by its cube faces, so
+    # the rig stays rigid). Fixes slight pose errors that show up as doubled edges and ghosts.
+    "pose_opt": True,
+    "pose_lr": 1e-5,
+    "pose_reg": 1e-6,
+    "pose_opt_start": 1000,
+    # Scene scaffold (scaffold.py): flat floor/wall planes from the SfM points; where a plane is
+    # what the photo shows, its exact depth guides training and the space in front of it must
+    # stay empty (kills floaters).
+    "scaffold": True,
+    "scaffold_tol": 0.01,          # plane thickness, x typical camera-to-surface distance
+    "scaffold_min_frac": 0.02,     # a plane needs >= this share of all SfM points
+    "scaffold_max_tilt_deg": 10,   # only horizontal / vertical planes
+    "scaffold_max_planes": 8,
+    "scaffold_ransac_iters": 400,
+    "scaffold_min_concentration": 0.5,  # share of nearby points ON the plane (bush ~0.25)
+    "scaffold_min_occupancy": 0.25,
+    "scaffold_res_step": 4,        # plane depth computed at 1/4 resolution
+    "scaffold_agree": 0.05,        # depth prior within 5% of the plane = plane is visible
+    "scaffold_conf": 1.0,          # depth-prior weight on visible plane pixels
+    "scaffold_weight": 0.05,       # empty-space penalty weight (constant through training)
+    "scaffold_margin": 0.03,       # in front of a plane by more than 3% counts as a floater
+    # A short video along the flight path, shifted slightly sideways: shows popping/floaters
+    # that a still image or the held-out score can't.
+    "flythrough": True,
+    "flythrough_offset": 0.03,     # sideways shift, x scene scale
     "test_every": 20,            # hold out every Nth image for an honest score (0 = off)
     "eval_every": 5000,
     # Monocular depth prior (see depth_prior.py)
@@ -329,9 +361,21 @@ class ColmapDataset:
         self.scene_scale = radius * 1.1 if radius > 0 else 1.0
         self.cache = {} if cache else None
         self.prior_dir = None  # set by depth_prior.prepare()
+        self.scaffold = None   # set by train() when scaffold planes were found
+        self.scaffold_conf = 1.0
+
+    def load_prior_full(self, i: int):
+        """(depth, weight, plane_depth or None) or None."""
+        p = depth_prior.load(self.prior_dir, self.frames[i]["name"])
+        if p is None:
+            return None
+        if self.scaffold is None:
+            return (p[0], p[1], None)
+        return self.scaffold.merge_prior(self.frames[i], p[0], p[1], self.scaffold_conf)
 
     def load_prior(self, i: int):
-        return depth_prior.load(self.prior_dir, self.frames[i]["name"])
+        p = self.load_prior_full(i)
+        return None if p is None else (p[0], p[1])
 
     def __len__(self):
         return len(self.frames)
@@ -386,7 +430,7 @@ class Prefetcher:
         while not self.stop:
             i = self._next_index()
             try:
-                item = (i, *self.ds.load(i), self.ds.load_prior(i))
+                item = (i, *self.ds.load(i), self.ds.load_prior_full(i))
             except Exception as e:  # surface loader errors in the main thread
                 item = e
             while not self.stop:
@@ -569,6 +613,29 @@ def train(data_dir: Path, out_dir: Path, s: dict):
              "scene scale %.3f", len(ds), ds.frames[0]["W"], ds.frames[0]["H"],
              len(train_idx), len(test_idx), len(ds.points), ds.scene_scale)
 
+    # ---- scaffold: flat surfaces as geometric rules ------------------------
+    scaffold_info: dict = {"enabled": False}
+    if s["scaffold"] and use_depth and ds.prior_dir is not None:
+        try:
+            up = (TARGET_AXES[s["up_axis"]][0].astype(np.float64) if ds.alignment is not None
+                  else np.array([0, -1.0, 0]))
+            centres = np.array([f["center"] for f in ds.frames])
+            planes = scaffold_mod.detect_planes(ds.points, up, centres, ds.scene_scale, s,
+                                                seed=int(s["seed"]))
+            scaffold_mod.save_report(planes, ds.points, centres, up, out_dir)
+            if planes:
+                ds.scaffold = scaffold_mod.Scaffold(planes, s)
+                ds.scaffold_conf = float(s["scaffold_conf"])
+            scaffold_info = {"enabled": bool(planes), "planes": [
+                {k: p[k] for k in ("label", "points", "area", "concentration", "occupancy")}
+                for p in planes]}
+        except Exception as e:  # an optional extra: never lose a run over it
+            log.warning("Scaffold skipped: %s: %s", type(e).__name__, e)
+            ds.scaffold = None
+            scaffold_info = {"enabled": False, "error": f"{type(e).__name__}: {e}"}
+    elif s["scaffold"]:
+        log.info("Scaffold skipped: it needs the depth prior (to see where a plane is visible)")
+
     # ---- model ------------------------------------------------------------
     sh_degree = int(s["sh_degree"])
     n_sh = (sh_degree + 1) ** 2
@@ -684,6 +751,33 @@ def train(data_dir: Path, out_dir: Path, s: dict):
     eye3 = torch.eye(3, device=device)
     bil, bil_opt = appearance.make(len(ds), s, device)
     train_idx_t = torch.tensor(train_idx, device=device)
+
+    # Camera refinement: one correction per 360 frame (all its views share it: rig stays rigid)
+    frame_keys = []
+    for f_ in ds.frames:
+        pv = naming.parse(f_["name"])
+        frame_keys.append(pv[0] if pv else f_["name"])
+    uniq = sorted(set(frame_keys))
+    fidx_of = {k: j for j, k in enumerate(uniq)}
+    frame_of = torch.tensor([fidx_of[k] for k in frame_keys], device=device)
+    use_pose = bool(s["pose_opt"])
+    pose_adj = torch.nn.Parameter(torch.zeros(len(uniq), 9, device=device))
+    pose_opt = torch.optim.Adam([pose_adj], lr=float(s["pose_lr"]),
+                                weight_decay=float(s["pose_reg"]))
+    rot6_id = torch.tensor([1.0, 0, 0, 0, 1.0, 0], device=device)
+
+    def pose_matrix(j):
+        """4x4 world-space correction for frame j (identity at zero)."""
+        a = pose_adj[j]
+        r6 = a[3:] + rot6_id
+        b1 = F.normalize(r6[:3], dim=0)
+        b2 = F.normalize(r6[3:] - (b1 * r6[3:]).sum() * b1, dim=0)
+        Rm = torch.stack([b1, b2, torch.linalg.cross(b1, b2)], 0)
+        T = torch.eye(4, device=device)
+        T = T.clone()
+        T[:3, :3] = Rm
+        T[:3, 3] = a[:3]
+        return T
     if bil is not None:
         log.info("Per-photo bilateral grids on (%dx%dx%d)", int(s["bilagrid_xy"]),
                  int(s["bilagrid_xy"]), int(s["bilagrid_luma"]))
@@ -700,6 +794,10 @@ def train(data_dir: Path, out_dir: Path, s: dict):
         if bil is not None and "bilagrid" in ckpt:
             bil.load_state_dict(ckpt["bilagrid"])
             bil_opt.load_state_dict(ckpt["bilagrid_opt"])
+        if "pose_adj" in ckpt and ckpt["pose_adj"].shape == pose_adj.shape:
+            with torch.no_grad():
+                pose_adj.copy_(ckpt["pose_adj"])
+            pose_opt.load_state_dict(ckpt["pose_opt"])
         del ckpt
 
     def apply_expo(img, i):  # img [1,H,W,3]: the photo-specific look (not exported)
@@ -717,13 +815,19 @@ def train(data_dir: Path, out_dir: Path, s: dict):
     packed = bool(s["packed"])
     lam = float(s["ssim_lambda"])
 
-    def render(fr, sh_deg, with_depth=False):
+    def view_of(fr, i=None):
+        V = torch.from_numpy(fr["viewmat"]).to(device)
+        if use_pose and i is not None:
+            V = V @ pose_matrix(frame_of[i])
+        return V
+
+    def render(fr, sh_deg, with_depth=False, i=None):
         return rasterization(
             render_mode="RGB+ED" if with_depth else "RGB",
             means=splats["means"], quats=splats["quats"],
             scales=torch.exp(splats["scales"]), opacities=torch.sigmoid(splats["opacities"]),
             colors=torch.cat([splats["sh0"], splats["shN"]], 1),
-            viewmats=torch.from_numpy(fr["viewmat"]).to(device)[None],
+            viewmats=view_of(fr, i)[None],
             Ks=torch.from_numpy(fr["K"]).to(device)[None],
             width=fr["W"], height=fr["H"], sh_degree=sh_deg,
             near_plane=float(s["near_plane"]), packed=packed, absgrad=absgrad,
@@ -744,7 +848,7 @@ def train(data_dir: Path, out_dir: Path, s: dict):
         for i in test_idx:
             img, _ = ds.load(i)
             gt = torch.from_numpy(img).to(device).float().div_(255.0)[None]
-            out, _, _ = render(ds.frames[i], sh_degree)
+            out, _, _ = render(ds.frames[i], sh_degree, i=i)
             out = (out[..., :3] if raw else apply_expo(out[..., :3], expo_src.get(i))).clamp(0, 1)
             mse = F.mse_loss(out, gt).item()
             psnrs.append(-10 * math.log10(max(mse, 1e-10)))
@@ -771,6 +875,7 @@ def train(data_dir: Path, out_dir: Path, s: dict):
                     **({"bilagrid": bil.state_dict(), "bilagrid_opt": bil_opt.state_dict()}
                        if bil is not None else {}),
                     "sky_geom": sky_geom, "fill_info": fill_info,
+                    "pose_adj": pose_adj.detach(), "pose_opt": pose_opt.state_dict(),
                     "settings": {k: v for k, v in s.items() if not k.startswith("_")}}, tmp)
         tmp.replace(ckpt_path)
 
@@ -788,7 +893,8 @@ def train(data_dir: Path, out_dir: Path, s: dict):
 
             want_depth = use_depth and prior is not None
             renders, alphas, info = render(fr, min(step // int(s["sh_degree_interval"]), sh_degree),
-                                           with_depth=want_depth)
+                                           with_depth=want_depth,
+                                           i=i if step >= int(s["pose_opt_start"]) else None)
             out = renders[..., :3]
             if s["random_background"]:
                 out = out + torch.rand(1, 1, 1, 3, device=device) * (1.0 - alphas)
@@ -806,6 +912,12 @@ def train(data_dir: Path, out_dir: Path, s: dict):
             if mcmc:
                 loss = loss + s["opacity_reg"] * torch.sigmoid(splats["opacities"]).abs().mean()
                 loss = loss + s["scale_reg"] * torch.exp(splats["scales"]).abs().mean()
+            frac_t = step / max(iters - 1, 1)
+            ent_start = float(s["opacity_entropy_start"])
+            if float(s["opacity_entropy"]) > 0 and frac_t >= ent_start:
+                w_ent = float(s["opacity_entropy"]) * min(1.0, (frac_t - ent_start) / 0.1)
+                oc = torch.sigmoid(splats["opacities"]).clamp(1e-4, 1 - 1e-4)
+                loss = loss - w_ent * (oc * oc.log() + (1 - oc) * (1 - oc).log()).mean()
             if use_expo:
                 loss = loss + float(s["exposure_reg"]) * expo[i].pow(2).mean()
             if bil is not None:
@@ -823,6 +935,12 @@ def train(data_dir: Path, out_dir: Path, s: dict):
                 loss = loss + lam_d * d_loss
                 depth_acc += float(d_loss.detach())
                 depth_n += 1
+                if len(prior) > 2 and prior[2] is not None and float(s["scaffold_weight"]) > 0:
+                    sd = torch.from_numpy(prior[2]).to(device, non_blocking=True)
+                    if mask is not None:
+                        sd = sd * torch.from_numpy(mask).to(device)
+                    loss = loss + float(s["scaffold_weight"]) * scaffold_mod.free_space_loss(
+                        renders[0, ..., 3], sd, float(s["scaffold_margin"]))
 
             strategy.step_pre_backward(params=splats, optimizers=optimizers, state=state,
                                        step=step, info=info)
@@ -837,6 +955,9 @@ def train(data_dir: Path, out_dir: Path, s: dict):
                 bil_opt.step()
                 bil_opt.zero_grad(set_to_none=True)
                 bil.recenter_(train_idx_t)
+            if use_pose and step >= int(s["pose_opt_start"]):
+                pose_opt.step()
+                pose_opt.zero_grad(set_to_none=True)
             if use_expo:  # same for the global corrections: average = no change
                 with torch.no_grad():
                     expo[train_idx_t] -= expo[train_idx_t].mean(0, keepdim=True)
@@ -909,6 +1030,48 @@ def train(data_dir: Path, out_dir: Path, s: dict):
             del original
     final_eval = evaluate(iters, save_images=True)  # scored on what is exported
     raw_eval = evaluate(iters, save_images=False, raw=True)
+
+    # ---- camera refinement record (the Fixer step and the bundle reuse it) ----
+    pose_info = {"enabled": use_pose}
+    if use_pose:
+        with torch.no_grad():
+            mats = torch.stack([pose_matrix(j) for j in range(len(uniq))]).cpu().numpy()
+        trans = np.linalg.norm(mats[:, :3, 3], axis=1) / max(ds.scene_scale, 1e-9)
+        rot = np.array([rot_angle_deg(m[:3, :3]) for m in mats])
+        pose_info.update({"frames": len(uniq),
+                          "translation_mean_pct_scene": round(float(trans.mean() * 100), 4),
+                          "translation_max_pct_scene": round(float(trans.max() * 100), 4),
+                          "rotation_mean_deg": round(float(rot.mean()), 4),
+                          "rotation_max_deg": round(float(rot.max()), 4)})
+        (out_dir / "pose_adjust.json").write_text(json.dumps(
+            {"note": "world-space correction per 360 frame: viewmat' = viewmat @ M",
+             "frames": {k: mats[j].tolist() for j, k in enumerate(uniq)}}))
+        log.info("Camera refinement: mean shift %.3f%% of scene, mean turn %.3f deg",
+                 pose_info["translation_mean_pct_scene"], pose_info["rotation_mean_deg"])
+    with torch.no_grad():
+        opa = torch.sigmoid(splats["opacities"])
+        faint_share = round(float(((opa > 0.005) & (opa < 0.3)).float().mean()), 4)
+    log.info("See-through Gaussians (opacity 0.005-0.3): %.1f%%", faint_share * 100)
+
+    # ---- fly-through video ---------------------------------------------------
+    if s["flythrough"]:
+        try:
+            with torch.no_grad():
+                render_flythrough(ds, lambda V, K, W, H: rasterization(
+                    means=splats["means"], quats=splats["quats"],
+                    scales=torch.exp(splats["scales"]),
+                    opacities=torch.sigmoid(splats["opacities"]),
+                    colors=torch.cat([splats["sh0"], splats["shN"]], 1),
+                    viewmats=torch.from_numpy(V).to(device)[None],
+                    Ks=torch.from_numpy(K).to(device)[None], width=W, height=H,
+                    sh_degree=sh_degree, near_plane=float(s["near_plane"]),
+                    packed=bool(s["packed"]),
+                    rasterize_mode="antialiased" if s["antialiased"] else "classic",
+                )[0][0, ..., :3],
+                    {k: mats[fidx_of[k]] for k in uniq} if use_pose else {},
+                    float(s["flythrough_offset"]), out_dir / "flythrough.mp4")
+        except Exception as e:  # noqa: BLE001  (a video is a nice-to-have)
+            log.warning("Fly-through video skipped: %s: %s", type(e).__name__, e)
     with torch.no_grad():
         kept, dropped = write_ply(
             out_dir / "splat.ply",
@@ -924,11 +1087,102 @@ def train(data_dir: Path, out_dir: Path, s: dict):
              "eval_history": eval_history,
              "depth_prior": depth_summary,
              "fill": fill_info,
+             "faint_share": faint_share,
+             "scaffold": scaffold_info,
+             "pose_refine": pose_info,
              "settings": {k: v for k, v in s.items() if not k.startswith("_")}}
     (out_dir / "train_stats.json").write_text(json.dumps(stats, indent=2))
     log.info("Wrote %s (%d Gaussians)", out_dir / "splat.ply", kept)
     if final_eval is not None:
         log.info("Held-out PSNR %.2f. Side-by-side photo vs splat images: %s", final_eval, eval_dir)
+
+
+def apply_pose_adjust(ds: "ColmapDataset", path: Path) -> int:
+    """Apply a saved camera refinement (pose_adjust.json) to a dataset's cameras."""
+    adj = json.loads(Path(path).read_text()).get("frames") or {}
+    n = 0
+    for f in ds.frames:
+        pv = naming.parse(f["name"])
+        key = pv[0] if pv else f["name"]
+        if key in adj:
+            V = (f["viewmat"].astype(np.float64) @ np.asarray(adj[key], np.float64))
+            f["viewmat"] = V.astype(np.float32)
+            f["center"] = (-V[:3, :3].T @ V[:3, 3]).astype(f["center"].dtype)
+            n += 1
+    return n
+
+
+# --------------------------------------------------------------------------- #
+# Fly-through video
+# --------------------------------------------------------------------------- #
+def flythrough_path(ds: "ColmapDataset", adjust: dict, offset: float, sub: int = 3,
+                    W: int = 960, H: int = 540, hfov: float = 90.0):
+    """Camera poses along the flight path (front view of each 360 frame, in frame order),
+    shifted sideways and up by `offset` x scene scale, so the video shows the splat from
+    places no photo was taken. Returns (list of 4x4 viewmats, K)."""
+    from scipy.spatial.transform import Rotation, Slerp
+    keyed = []
+    for f in ds.frames:
+        pv = naming.parse(f["name"])
+        if pv and pv[1] == 0:
+            V = f["viewmat"].astype(np.float64)
+            if pv[0] in adjust:
+                V = V @ np.asarray(adjust[pv[0]], np.float64)
+            keyed.append((naming.frame_number(pv[0]), V))
+    if len(keyed) < 2:  # no rig naming: use every image in name order
+        keyed = [(j, f["viewmat"].astype(np.float64))
+                 for j, f in enumerate(sorted(ds.frames, key=lambda f: f["name"]))]
+    keyed.sort(key=lambda kv: kv[0])
+    Rs = np.stack([V[:3, :3] for _, V in keyed])
+    Cs = np.stack([-V[:3, :3].T @ V[:3, 3] for _, V in keyed])
+    # gentle smoothing so drone jitter doesn't dominate the video
+    k = 5
+    pad = np.pad(Cs, ((k // 2, k // 2), (0, 0)), mode="edge")
+    Cs = np.stack([pad[i:i + k].mean(0) for i in range(len(Cs))])
+    n = len(Rs)
+    ts = np.linspace(0, n - 1, (n - 1) * sub + 1)
+    slerp = Slerp(np.arange(n), Rotation.from_matrix(Rs))
+    R_all = slerp(ts).as_matrix()
+    C_all = np.stack([np.interp(ts, np.arange(n), Cs[:, d]) for d in range(3)], 1)
+    sh = offset * ds.scene_scale
+    out = []
+    for R, C in zip(R_all, C_all):
+        C2 = C + R[0] * sh - R[1] * sh * 0.5   # camera right, and up (camera y points down)
+        V = np.eye(4)
+        V[:3, :3] = R
+        V[:3, 3] = -R @ C2
+        out.append(V.astype(np.float32))
+    f = (W / 2) / math.tan(math.radians(hfov) / 2)
+    K = np.array([[f, 0, W / 2], [0, f, H / 2], [0, 0, 1]], np.float32)
+    return out, K
+
+
+def render_flythrough(ds, render_rgb, adjust: dict, offset: float, path: Path,
+                      W: int = 960, H: int = 540, fps: int = 30):
+    import shutil
+    import subprocess
+    ff = shutil.which("ffmpeg")
+    if ff is None:
+        log.warning("Fly-through video skipped: ffmpeg not found")
+        return
+    views, K = flythrough_path(ds, adjust, offset, W=W, H=H)
+    t0 = time.time()
+    proc = subprocess.Popen(
+        [ff, "-y", "-loglevel", "error", "-f", "rawvideo", "-pix_fmt", "rgb24",
+         "-s", f"{W}x{H}", "-r", str(fps), "-i", "-", "-c:v", "libx264", "-preset", "medium",
+         "-crf", "20", "-pix_fmt", "yuv420p", "-movflags", "+faststart", str(path)],
+        stdin=subprocess.PIPE)
+    try:
+        for V in views:
+            img = render_rgb(V, K, W, H).clamp(0, 1).mul(255).byte().cpu().numpy()
+            proc.stdin.write(np.ascontiguousarray(img).tobytes())
+    finally:
+        proc.stdin.close()
+        rc = proc.wait()
+    if rc != 0:
+        raise RuntimeError(f"ffmpeg exited with {rc}")
+    log.info("Fly-through video: %s (%d frames, %.1f s, made in %.0f s)", path, len(views),
+             len(views) / fps, time.time() - t0)
 
 
 # --------------------------------------------------------------------------- #

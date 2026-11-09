@@ -89,7 +89,7 @@ DEFAULT_CONFIG: dict = {
     },
     "sfm": {
         "colmap_bin": "colmap",
-        "mapper": "auto",
+        "mapper": "colmap",
         "auto_min_registered": 0.9,
         "auto_global_timeout_min": 20,
         "glomap_bin": "glomap",
@@ -988,6 +988,9 @@ def write_scene_bundle(job: Job, dest: Path):
             (dest / "train_settings.json").write_text(json.dumps(settings, indent=2))
         except (OSError, ValueError) as e:
             log.warning("Could not record training settings in the bundle: %s", e)
+    pa = job.train_dir / "pose_adjust.json"
+    if pa.exists():  # refined cameras: the Fixer step must render from the same poses
+        shutil.copy2(pa, dest / "pose_adjust.json")
     log.info("Scene bundle written to %s", dest)
 
 

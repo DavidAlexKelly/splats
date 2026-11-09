@@ -132,6 +132,8 @@ Results, in `/workspace/splats` (never overwritten; re-runs become `patio_v2`, `
 ```
 patio/patio.ply              the splat (real data)
 patio/eval/*.jpg             photo vs splat comparisons; train_stats.json, pipeline.log, scene/
+patio/flythrough.mp4         video along a slightly shifted path: the quickest way to judge popping
+patio/scaffold_topdown.jpg   the flat surfaces it found (floor green, walls blue) from above
 patio_fixer/patio_fixer.ply  the AI-filled version; fixer_stats.json, fixer_preview/*.jpg
 _logs/                       full logs of every run
 ```
@@ -165,9 +167,10 @@ everything on start and stops itself. Log: `/workspace/splats/_logs/auto_run.log
 | A run stopped when you closed the window | Run it inside `tmux` (see step 4). |
 
 Defaults that suit a rented GPU: the number of Gaussians follows the GPU's memory (5M on a
-5090, 4M on a 4090), and camera solving tries COLMAP's fast global mapper first (minutes),
-falling back to the slower incremental one if it places under 90% of the images or takes
-more than 20 minutes.
+5090, 4M on a 4090). Camera solving uses COLMAP's incremental mapper (about 50 minutes for
+patio, on the processor; the GPU idles meanwhile). The global mapper is available with
+`--overrides '{"sfm":{"mapper":"auto","auto_global_timeout_min":60}}'`, but on patio it was
+no quicker.
 
 The `_fixer` results come from NVIDIA Fixer (weights under the NVIDIA Open Model License:
 commercial use allowed) and contain AI-generated content; the real-only splat is always

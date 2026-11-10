@@ -658,17 +658,31 @@ def _block_to_dict(b) -> dict:
     return dict(b.__dict__)
 
 
-def _strip_old_images(msgs: list[dict], keep_last: int = 2):
-    """Older tool results lose their images (keeps the conversation and its cost small)."""
-    user_turns = [k for k, m in enumerate(msgs) if m["role"] == "user"
-                  and isinstance(m["content"], list)
-                  and any(isinstance(c, dict) and c.get("type") == "tool_result" for c in m["content"])]
-    for k in user_turns[:-keep_last]:
-        for c in msgs[k]["content"]:
-            if c.get("type") == "tool_result" and isinstance(c.get("content"), list):
-                c["content"] = [x if x.get("type") != "image"
-                                else {"type": "text", "text": "[image shown earlier, removed]"}
-                                for x in c["content"]]
+def _set_cache_point(msgs: list[dict]):
+    """Prompt caching without ever editing earlier turns (the API checks that Claude's
+    earlier reasoning still sits in the exact conversation it was written in): one cache
+    point on the briefing, one rolling point on the newest message."""
+    for m in msgs[1:]:
+        if isinstance(m["content"], list):
+            for c in m["content"]:
+                if isinstance(c, dict):
+                    c.pop("cache_control", None)
+    last = msgs[-1]
+    if len(msgs) > 1 and last["role"] == "user" and isinstance(last["content"], list) \
+            and last["content"]:
+        last["content"][-1]["cache_control"] = {"type": "ephemeral"}
+
+
+def _drop_thinking(msgs: list[dict]) -> int:
+    """Remove Claude's reasoning blocks from earlier turns (recovery path)."""
+    n = 0
+    for m in msgs:
+        if m["role"] == "assistant" and isinstance(m["content"], list):
+            keep = [c for c in m["content"]
+                    if c.get("type") not in ("thinking", "redacted_thinking")]
+            n += len(m["content"]) - len(keep)
+            m["content"] = keep or [{"type": "text", "text": "(continuing)"}]
+    return n
 
 
 def load_prompt(s: dict) -> str:
@@ -746,12 +760,13 @@ def converse(ws: Workspace, client, s: dict, scene_name: str) -> dict:
     transcript = [f"# Scaffold agent: {scene_name}\n", "## Briefing\n", intro, ""]
     finished, nudges, turns, stop = False, 0, 0, ""
     use_thinking = thinking > 0
+    recovered = False
     while turns < max_turns:
         if usage.cost >= cap:
             stop = f"cost cap reached (~${usage.cost:.2f} of ${cap:.2f})"
             break
         turns += 1
-        _strip_old_images(msgs)
+        _set_cache_point(msgs)
         kw = dict(model=model, max_tokens=(thinking + 6000) if use_thinking else 6000,
                   system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
                   tools=TOOLS, messages=msgs)
@@ -760,9 +775,18 @@ def converse(ws: Workspace, client, s: dict, scene_name: str) -> dict:
         try:
             resp = client.messages.create(**kw)
         except Exception as e:  # noqa: BLE001
-            if use_thinking and "thinking" in str(e).lower():
-                log.info("Scaffold agent: model refused extended thinking; continuing without")
+            msg = str(e).lower()
+            if use_thinking and "thinking" in msg and "signature" not in msg:
+                log.info("Scaffold agent: the model doesn't take this thinking setting; "
+                         "continuing without it")
                 use_thinking = False
+                turns -= 1
+                continue
+            if ("signature" in msg or "thinking" in msg) and not recovered:
+                n = _drop_thinking(msgs)
+                log.info("Scaffold agent: the API rejected earlier reasoning blocks; dropped %d "
+                         "and retrying", n)
+                recovered = True
                 turns -= 1
                 continue
             raise
@@ -849,8 +873,9 @@ def build(ds, s: dict, out_dir: Path, load_prior, train_idx: list[int], up: np.n
 
     surfaces, cinfo = sc.find_candidates(ds.points, up, cams, s, seed=int(s["seed"]))
     info["candidates"] = cinfo
-    check_idx = sc.sample_images(train_idx, int(s["scaffold_check_images"]))
+    check_idx = images_with_prior(train_idx, load_prior, int(s["scaffold_check_images"]))
     sc.photo_check(surfaces, ds, load_prior, check_idx, s)
+    sc.resolve_overlaps(surfaces, s)
     sc.auto_rules(surfaces, s)
     try:
         cv2.imwrite(str(out_dir / "scaffold_candidates.jpg"),
@@ -904,6 +929,18 @@ def build(ds, s: dict, out_dir: Path, load_prior, train_idx: list[int], up: np.n
              ", ".join(f"{v} {k}" for k, v in n_rule.items() if v) or "nothing")
     info["rules"] = n_rule
     return surfaces, info
+
+
+def images_with_prior(train_idx: list[int], load_prior, n: int) -> list[int]:
+    """n photos spread along the flight that have a depth estimate (a photo without one
+    can't confirm or reject anything)."""
+    pool = sc.sample_images(train_idx, n * 4)
+    have = [i for i in pool if load_prior(i) is not None]
+    if len(have) < n:  # few priors: look through everything
+        seen = set(pool)
+        have += [i for i in train_idx if i not in seen and load_prior(i) is not None]
+        have.sort()
+    return sc.sample_images(have, n)
 
 
 def _pad_to(img: np.ndarray, width: int) -> np.ndarray:

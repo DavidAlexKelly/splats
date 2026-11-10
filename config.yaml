@@ -126,7 +126,8 @@ train:
     antialiased: true    # Mip-Splatting style anti-aliasing (tick "Anti-aliased" in the viewer)
     opacity_entropy: 0.002     # late in training: every Gaussian solid or gone (less popping)
     opacity_entropy_start: 0.6
-    pose_opt: true             # small per-frame camera correction (sharper edges, fewer ghosts)
+    pose_opt: false            # per-frame camera correction; on patio it moved cameras ~0.03%,
+                               # so it's off (true to try it on a scene with a weaker solve)
     pose_lr: 1.0e-5
     pose_opt_start: 1000
     # Scene scaffold: floor/walls/glass with a rule each. Claude decides when the pod has

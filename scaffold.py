@@ -408,23 +408,75 @@ def photo_check(surfaces: list[dict], ds, load_prior, image_idx: list[int], s: d
             photo = (A["views"] >= 2) & (A["agree"] >= 0.5 * np.maximum(A["seen"], 1))
             g.mask = clean_mask(base | photo, close=2)
             g.save()
-        sel = g.mask
-        seen = float(A["seen"][sel].sum())
-        st = srf["stats"]
-        st.update({
-            "area": round(g.area(), 3),
-            "photo_agree": round(float(A["agree"][sel].sum()) / max(seen, 1), 3),
-            "see_through": round(float(A["behind"][sel].sum()) / max(seen, 1), 3),
-            "hidden": round(float(A["front"][sel].sum()) / max(seen, 1), 3),
-            "views": int(sum(1 for t in views[k] if t[1] > 20)),
-            "photo_filled_share": round(float((g.mask & ~base).sum()) / max(int(g.mask.sum()), 1), 3),
-        })
-        st["enough_views"] = st["views"] >= min_views
+        srf["stats"]["views"] = int(sum(1 for t in views[k] if t[1] > 20))
+        srf["stats"]["enough_views"] = srf["stats"]["views"] >= min_views
+        srf["stats"]["photo_filled_share"] = round(
+            float((g.mask & ~base).sum()) / max(int(g.mask.sum()), 1), 3)
+        srf["_acc"] = A  # per-cell photo evidence (in memory only), for resolve_overlaps
+        _photo_stats(srf, g, A)
         views[k].sort(key=lambda t: -(t[1] + 0.2 * t[0]))
         srf["best_views"] = [t[2] for t in views[k][:6] if t[0] > 0]
     if grow:
         log.info("Scaffold: checked %d candidate(s) against %d photo(s)", len(surfaces), n_used)
     return {"images_checked": n_used}
+
+
+def _photo_stats(srf: dict, g: Geo, A: dict):
+    sel = g.mask
+    seen = float(A["seen"][sel].sum())
+    srf["stats"].update({
+        "area": round(g.area(), 3),
+        "photo_agree": round(float(A["agree"][sel].sum()) / max(seen, 1), 3),
+        "see_through": round(float(A["behind"][sel].sum()) / max(seen, 1), 3),
+        "hidden": round(float(A["front"][sel].sum()) / max(seen, 1), 3)})
+
+
+def resolve_overlaps(surfaces: list[dict], s: dict, max_angle_deg: float = 5.0) -> int:
+    """Nearly parallel surfaces that overlap (e.g. a floor found as several pieces at
+    slightly different heights): each overlapping patch goes to the surface the photos
+    agree with there, so no area has two competing planes. Planes themselves don't move,
+    so a real step between two levels stays a step. Returns how many cells moved."""
+    moved = 0
+    geos = [Geo(x) for x in surfaces]
+    cos_max = math.cos(math.radians(max_angle_deg))
+    order = sorted(range(len(surfaces)), key=lambda k: -surfaces[k]["stats"].get("photo_agree", 0))
+    for ai in order:
+        for bi in order:
+            if ai == bi:
+                continue
+            A, B = geos[ai], geos[bi]
+            sa, sb = surfaces[ai], surfaces[bi]
+            if "_acc" not in sa or "_acc" not in sb or abs(float(A.n @ B.n)) < cos_max:
+                continue
+            gap = abs(float((B.c - A.c) @ A.n))
+            if gap > 4 * max(float(sa["tol"]), float(sb["tol"])):
+                continue
+            ra, ca = np.nonzero(A.mask)
+            if len(ra) == 0:
+                continue
+            cc = A.cell_centres()
+            rb, cb, ok = B.cell_of(B.to_uv(cc))  # A's cells as seen on B's plane
+            both = ok.copy()
+            both[ok] = B.mask[rb[ok], cb[ok]]
+            if not both.any():
+                continue
+            Aa, Ab = sa["_acc"], sb["_acc"]
+            score_a = Aa["agree"][ra[both], ca[both]] / (Aa["seen"][ra[both], ca[both]] + 1)
+            score_b = Ab["agree"][rb[both], cb[both]] / (Ab["seen"][rb[both], cb[both]] + 1)
+            b_wins = score_b > score_a
+            idx = np.nonzero(both)[0]
+            lose_a, lose_b = idx[b_wins], idx[~b_wins]
+            A.mask[ra[lose_a], ca[lose_a]] = False
+            B.mask[rb[lose_b], cb[lose_b]] = False
+            moved += len(idx)
+    for srf, g in zip(surfaces, geos):
+        g.save()
+        if "_acc" in srf:
+            _photo_stats(srf, g, srf["_acc"])
+    if moved:
+        log.info("Scaffold: split %d overlapping outline cell(s) between nearly parallel "
+                 "surfaces (each goes to the one the photos agree with)", moved)
+    return moved
 
 
 # --------------------------------------------------------------------------- #

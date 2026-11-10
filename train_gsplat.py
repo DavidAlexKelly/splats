@@ -82,7 +82,7 @@ DEFAULTS = {
     "opacity_entropy_start": 0.6,  # fraction of training before it starts (ramps in over 10%)
     # Camera refinement: one small pose correction per 360 frame (shared by its cube faces, so
     # the rig stays rigid). Fixes slight pose errors that show up as doubled edges and ghosts.
-    "pose_opt": True,
+    "pose_opt": False,           # off by default: on a rig solve it moved cameras ~0.03%
     "pose_lr": 1e-5,
     "pose_reg": 1e-6,
     "pose_opt_start": 1000,
@@ -98,7 +98,7 @@ DEFAULTS = {
     "scaffold_model": "claude-opus-5-5",
     "scaffold_max_cost": 3.0,      # USD, estimated from tokens; stops the agent when reached
     "scaffold_max_turns": 40,
-    "scaffold_thinking": 6000,     # extended-thinking budget per turn (0 = off)
+    "scaffold_thinking": 0,        # extended-thinking budget per turn (0 = model default)
     "scaffold_price_in": 5.0,      # USD per million input tokens (for the estimate only)
     "scaffold_price_out": 25.0,    # USD per million output tokens
     "scaffold_prompt": "",         # custom instructions file (default: scaffold_prompt.md)

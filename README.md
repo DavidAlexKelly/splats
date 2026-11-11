@@ -409,7 +409,7 @@ corrections); a round that lowers that by more than `max_round_drop` is undone a
 later (further-out) rounds are skipped. The best round is what's saved (`kept_round`;
 0 = Fixer didn't help and the original splat is kept).
 
-Output: `<name>_fixer/<name>_fixer.ply`, `fixer_stats.json` (scores before/after, per round)
+Output: `<name>_fixer/<name>_fixer.ply`, `coverage_topdown.jpg` (the gaps it aimed at), `fixer_stats.json` (scores before/after, per round)
 and `fixer_preview/roundR_kk_render_fixer_photo.jpg` (render with its gaps tinted red |
 Fixer | the real photo that shows the most of the same surfaces). Per round, `fixer_stats.json`
 also says how many views were aimed at gaps, their mean gap share, the mean trust, and how

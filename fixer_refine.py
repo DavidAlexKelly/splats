@@ -544,6 +544,12 @@ def refine(data_dir: Path, ply: Path, out_dir: Path, s: dict, d: dict) -> dict:
     use_cov = bool(d.get("coverage", True))
     view = scene_coverage.SplatView(splats, s, sh_degree, bool(s.get("antialiased")))
     lo_c, hi_c, floor_c = float(d["gap_low"]), float(d["gap_high"]), float(d["observed_weight"])
+    if use_cov:  # the map of what Fixer is aiming at (same as the trainer's, for older results)
+        try:
+            stats["coverage_before"] = scene_coverage.report(
+                view, ds.frames, train_idx, s, out_dir, up, inner_radius=10 * ds.scene_scale)
+        except Exception as e:  # noqa: BLE001
+            log.warning("Coverage map skipped: %s: %s", type(e).__name__, e)
     ref_scores: list[float] = []
     # (fixed image, camera, render alpha, per-pixel weight, trust)
     novel: list[tuple[np.ndarray, dict, np.ndarray, np.ndarray, float]] = []

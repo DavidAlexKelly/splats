@@ -1,0 +1,252 @@
+{
+  "iterations": 30000,
+  "gaussians": 3000000,
+  "dropped_non_finite": 0,
+  "minutes": 33.8,
+  "peak_vram_gb": 3.06,
+  "images_train": 1219,
+  "images_heldout": 65,
+  "heldout_psnr": 28.284,
+  "heldout_psnr_raw": 27.325,
+  "eval_history": [
+    {
+      "step": 5000,
+      "psnr": 26.265
+    },
+    {
+      "step": 10000,
+      "psnr": 26.948
+    },
+    {
+      "step": 15000,
+      "psnr": 27.4
+    },
+    {
+      "step": 20000,
+      "psnr": 27.547
+    },
+    {
+      "step": 25000,
+      "psnr": 27.667
+    },
+    {
+      "step": 30000,
+      "psnr": 28.284
+    },
+    {
+      "step": 30000,
+      "psnr": 26.888
+    },
+    {
+      "step": 30000,
+      "psnr": 26.888
+    },
+    {
+      "step": 30000,
+      "psnr": 28.284
+    }
+  ],
+  "depth_prior": {
+    "cache": "/workspace/work/retrain_patio/patio/depth_prior/auto_default_selective_d1_ws1.0_a1_v2",
+    "with_prior": 627,
+    "rejected": 592,
+    "train_images": 1219,
+    "backend_used": "da2"
+  },
+  "fill": {
+    "depth_seed": {
+      "seeded": 300000,
+      "images": 627
+    },
+    "sky_shell": {
+      "points": 100000,
+      "radius": 119.0579,
+      "coloured": 98707
+    },
+    "prune": {
+      "before_psnr": 28.283892488474386,
+      "applied": "none"
+    }
+  },
+  "faint_share": 0.2733,
+  "scaffold": {
+    "enabled": true,
+    "fingerprint": "165095,3.714,6.168,-3.421,12.539,9.94,10.759,1,-0.0061,0.0018,-0.2231,-0.0018,0.0017,1,-0.1289,-0.0061,-1,0.0017,-0.0118,0,0,0,1",
+    "candidates": {
+      "typical_distance": 14.8768,
+      "tol": 0.14877,
+      "cell": 0.22315,
+      "sfm_points": 165095,
+      "candidates": 41
+    },
+    "source": "claude",
+    "agent": {
+      "used": true,
+      "model": "claude-opus-5-5",
+      "turns": 7,
+      "finished": true,
+      "stopped": null,
+      "reviews": 1,
+      "summary": "The scene is a small paved patio behind a brick house, filmed at dusk. It has a large sliding glass door into a lit living room, and dark fences and dense trees and bushes around the other sides. I made 6 surfaces into rules and set everything else to ignore. **Solid:** the brick house wall (#0), after cutting off the part that ran into the bushes to the right of the door, plus the thin wall strip beside the door (#31). I also merged five overlapping floor patches (#38, #34, #4, #6, #36) into one solid paving surface (#42). **Glass:** the pipeline had missed the door, so I added it as a new surface (#41), fitted to the door frame, so the reflections and the view into the room get painted onto it instead of becoming floating blobs. **Soft:** the planting-bed ground under the bushes (#39, #40) and the mixed paving-and-bed area (#35). I didn't separate the paving inside #35, so part of it is treated as soft rather than solid; that loses some flattening there but carves nothing away. **Ignore:** the interior floor seen through the glass (#37), a small sliver by the door (#5), and the many sloped or wall-like cuts through foliage, trees and sky. Two things are still loose. From above, the house wall #0 still reaches well past the patio to the east, and a few small bits of it still sit on the bushes next to the door in some photos. I left both as they are.",
+      "input_tokens": 16,
+      "output_tokens": 2591,
+      "cache_write_tokens": 25987,
+      "cache_read_tokens": 114897,
+      "estimated_cost_usd": 0.285,
+      "seconds": 43.5
+    },
+    "rules": {
+      "solid": 3,
+      "glass": 1,
+      "soft": 3,
+      "ignore": 31
+    },
+    "flat_splats": 375706,
+    "usage": [
+      {
+        "id": 0,
+        "rule": "solid",
+        "pixels_checked": 404764125,
+        "share_in_front": 0.04131
+      },
+      {
+        "id": 31,
+        "rule": "solid",
+        "pixels_checked": 3846959,
+        "share_in_front": 0.05671
+      },
+      {
+        "id": 35,
+        "rule": "soft",
+        "pixels_checked": 295093864,
+        "share_in_front": 0.0043
+      },
+      {
+        "id": 39,
+        "rule": "soft",
+        "pixels_checked": 474110938,
+        "share_in_front": 0.00113
+      },
+      {
+        "id": 40,
+        "rule": "soft",
+        "pixels_checked": 23737556,
+        "share_in_front": 0.00266
+      },
+      {
+        "id": 41,
+        "rule": "glass",
+        "pixels_checked": 348920352,
+        "share_in_front": 0.01615
+      },
+      {
+        "id": 42,
+        "rule": "solid",
+        "pixels_checked": 740998022,
+        "share_in_front": 0.02229
+      }
+    ]
+  },
+  "pose_refine": {
+    "enabled": false
+  },
+  "settings": {
+    "iterations": 30000,
+    "strategy": "mcmc",
+    "cap_max": 3000000,
+    "sh_degree": 2,
+    "sh_degree_interval": 1000,
+    "downscale": 1,
+    "ssim_lambda": 0.2,
+    "opacity_reg": 0.01,
+    "scale_reg": 0.01,
+    "random_background": false,
+    "packed": true,
+    "cache_images": false,
+    "loader_threads": 4,
+    "log_every": 100,
+    "save_every": 5000,
+    "near_plane": 0.01,
+    "seed": 42,
+    "align": true,
+    "up_axis": "+y",
+    "world_scale": 1.0,
+    "exposure": true,
+    "exposure_lr": 0.001,
+    "exposure_reg": 0.01,
+    "bilagrid": false,
+    "bilagrid_xy": 16,
+    "bilagrid_luma": 8,
+    "bilagrid_lr": 0.002,
+    "bilagrid_tv": 10.0,
+    "antialiased": true,
+    "opacity_entropy": 0.002,
+    "opacity_entropy_start": 0.6,
+    "pose_opt": false,
+    "pose_lr": 1e-05,
+    "pose_reg": 1e-06,
+    "pose_opt_start": 1000,
+    "scaffold": true,
+    "scaffold_mode": "claude",
+    "scaffold_decision": "",
+    "scaffold_redo": false,
+    "scaffold_model": "claude-opus-5-5",
+    "scaffold_max_cost": 3.0,
+    "scaffold_max_turns": 40,
+    "scaffold_thinking": 0,
+    "scaffold_price_in": 5.0,
+    "scaffold_price_out": 25.0,
+    "scaffold_prompt": "",
+    "scaffold_tol": 0.01,
+    "scaffold_cell": 0.015,
+    "scaffold_candidates": 40,
+    "scaffold_cand_min_frac": 0.002,
+    "scaffold_ransac_iters": 300,
+    "scaffold_max_tilt_deg": 10,
+    "scaffold_check_images": 48,
+    "scaffold_check_step": 8,
+    "scaffold_min_views": 3,
+    "scaffold_min_area": 0.005,
+    "scaffold_min_concentration": 0.5,
+    "scaffold_photo_min": 0.5,
+    "scaffold_res_step": 4,
+    "scaffold_agree": 0.05,
+    "scaffold_conf": 1.0,
+    "scaffold_weight": 0.05,
+    "scaffold_margin": 0.03,
+    "scaffold_soft_margin": 0.15,
+    "scaffold_flat_weight": 0.02,
+    "scaffold_flat_start": 2000,
+    "scaffold_flat_every": 100,
+    "flythrough": true,
+    "flythrough_offset": 0.03,
+    "test_every": 20,
+    "eval_every": 5000,
+    "depth_prior": true,
+    "depth_backend": "auto",
+    "depth_model": "",
+    "depth_process_res": 756,
+    "depth_batch": 8,
+    "depth_mode": "selective",
+    "depth_min_weight": 0.15,
+    "depth_weight": 0.1,
+    "depth_end_ratio": 0.1,
+    "depth_grad_weight": 1.0,
+    "depth_min_points": 30,
+    "depth_max_rel_error": 0.35,
+    "depth_seed": true,
+    "depth_seed_max_points": 300000,
+    "depth_seed_min_weight": 0.5,
+    "depth_seed_stride": 8,
+    "depth_seed_voxel": 0.004,
+    "sky_shell": true,
+    "sky_points": 100000,
+    "sky_radius_mult": 3.0,
+    "prune": true,
+    "prune_min_opacity": 0.005,
+    "prune_max_psnr_drop": 0.05,
+    "prune_near_camera": 0.02,
+    "prune_max_scale": 1.0,
+    "prune_outlier_std": 3.0
+  }
+}

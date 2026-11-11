@@ -1,0 +1,13 @@
+{
+  "registered": 1284,
+  "points": 165095,
+  "camera_path_extent": 11.867248803025731,
+  "median_scene_depth": 18.58912287630539,
+  "parallax_ratio": 0.6383974586639756,
+  "total_images": 1284,
+  "models": 1,
+  "chosen_model": "0",
+  "registered_ratio": 1.0,
+  "mapper": "colmap",
+  "rig": true
+}

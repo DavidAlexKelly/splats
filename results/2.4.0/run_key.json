@@ -1,0 +1,17 @@
+{
+  "video": "patio.mp4",
+  "source": "patio_v5",
+  "run_key": "ccbf340cb7759688",
+  "kind": "splat",
+  "retrain": true,
+  "decision": "",
+  "overrides": {
+    "train": {
+      "custom": {
+        "cap_max": 3000000
+      }
+    }
+  },
+  "status": "ok",
+  "finished": "2026-11-11 01:04:24"
+}

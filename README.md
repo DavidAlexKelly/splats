@@ -387,13 +387,22 @@ the fact, on a finished splat (`pod_run.py` does this automatically after each v
 
 1. re-cuts the exact training images from the video using the result's `scene/` bundle
    (poses, chosen frames, settings; published with every result),
-2. renders the splat from viewpoints the drone never had (off the path, turned between the
-   cube faces), at Fixer's native 1024x576,
+2. measures how well the real photos cover every part of the splat (the coverage map, see
+   below) and renders the splat from viewpoints the drone never had (off the path, turned
+   between the cube faces), at Fixer's native 1024x576. Three in four of those viewpoints
+   are picked because they look at gaps (`coverage_share`); the rest are random,
 3. NVIDIA **Fixer** (Cosmos-Predict2 0.6B, single-step diffusion; the successor to Difix3D+)
    cleans each render,
-4. keeps training on the real photos plus the cleaned views (weighted lower), over a few
-   rounds that move further from the path, while nudging every Gaussian to be clearly solid
-   or gone (`opacity_entropy`), which clears see-through haze.
+4. checks each cleaned view: where real photos already pin the scene down, Fixer should
+   barely change the render. Views it changed a lot there are trusted less, or dropped
+   (`min_view_conf`). Then **Claude** looks at the views with the most made-up content and
+   rejects any that invent objects or break the layout (`review: claude`, about $0.05 a
+   round; `fixer_review.md` says what it rejected and why),
+5. keeps training on the real photos plus the cleaned views (weighted lower, and by trust),
+   learning each view mostly in its gaps: well covered pixels count only
+   `observed_weight` (0.25), so Fixer can't repaint what the photos show but can still clear
+   floaters there. Over a few rounds that move further from the path, it nudges every
+   Gaussian to be clearly solid or gone (`opacity_entropy`), which clears see-through haze.
 
 After each round it scores held-out real photos the way viewers see them (no per-photo
 corrections); a round that lowers that by more than `max_round_drop` is undone and the
@@ -401,8 +410,26 @@ later (further-out) rounds are skipped. The best round is what's saved (`kept_ro
 0 = Fixer didn't help and the original splat is kept).
 
 Output: `<name>_fixer/<name>_fixer.ply`, `fixer_stats.json` (scores before/after, per round)
-and `fixer_preview/roundR_kk_render_fixer_photo.jpg` (render | Fixer | the real photo that
-shows the most of the same surfaces). Settings: `fixer:` in `config.yaml`.
+and `fixer_preview/roundR_kk_render_fixer_photo.jpg` (render with its gaps tinted red |
+Fixer | the real photo that shows the most of the same surfaces). Per round, `fixer_stats.json`
+also says how many views were aimed at gaps, their mean gap share, the mean trust, and how
+many were dropped or rejected. Settings: `fixer:` in `config.yaml` (`coverage: false` gives
+the old behaviour: random views, every pixel learned equally).
+
+### Coverage map: where the real photos don't reach
+
+Every result gets `coverage_topdown.jpg` and `coverage.json` (`scene_coverage.py`). Each
+Gaussian is scored 0-1 by how well the real photos pin it down. A photo counts when the
+Gaussian is in its frame and not hidden behind something there, and counts less the
+further away it was. Full coverage needs about 6 close-up sightings
+(`coverage_good_views`) spread over at least 20 degrees (`coverage_good_spread`). One view,
+or many from the same direction, can't fix where something is.
+
+The map shows the scene from above: red = poorly covered, green = well covered, blue =
+the flight path. The worst few gaps are numbered, and `coverage.json` lists them (centre,
+mean coverage, distance from the flight path) with the share of the solid Gaussians that are
+poorly covered. **Fly there next time**: a short extra pass beats any AI fill-in. The
+Fixer step aims at the same gaps.
 
 It runs in its own environment in the image (`/opt/fixer`, built by `pod/install_fixer.sh`;
 `--build-arg WITH_FIXER=0` leaves it out), started by `fixer_fix.py`. It needs a bfloat16

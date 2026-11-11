@@ -12,6 +12,7 @@
 !selftest.py
 !naming.py
 !scene_fill.py
+!scene_coverage.py
 !fixer_fix.py
 !fixer_refine.py
 !appearance.py

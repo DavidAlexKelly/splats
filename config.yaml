@@ -141,6 +141,7 @@ train:
     scaffold_flat_weight: 0.02 # splats lie flat on solid/glass surfaces (0 = off)
     scaffold_margin: 0.03
     scaffold_soft_margin: 0.15
+    coverage: true             # coverage_topdown.jpg: where real photos don't cover the scene
     flythrough: true           # train/flythrough.mp4: a video along a slightly shifted path
     flythrough_offset: 0.03
     test_every: 20       # hold out every 20th image to score quality honestly (0 = off)
@@ -259,4 +260,12 @@ fixer:
   max_round_drop: 0.3    # undo a round that costs more held-out PSNR than this, and stop
   opacity_entropy: 0.003 # push Gaussians to solid-or-gone: clears see-through haze (0 = off)
   appearance_warmup: auto # fit colour corrections first (2 steps per photo), so 'before' is fair
-  previews: 6            # render | Fixer | real photo triplets saved per round
+  previews: 6            # render (gaps tinted red) | Fixer | real photo, saved per round
+  # Aim at the gaps (coverage map, scene_coverage.py); false = random views, every pixel equal
+  coverage: true
+  coverage_share: 0.75   # share of views chosen for looking at poorly covered areas
+  observed_weight: 0.25  # how much a fixed view may change well covered pixels (gaps: 1)
+  min_view_conf: 0.2     # drop views Fixer changed a lot where real photos already agree
+  review: claude         # Claude rejects fixed views that invent things (needs the API key;
+                         # ~$0.05 a round); "off" to skip
+  review_views: 12       # views it checks per round (those with the most gap)

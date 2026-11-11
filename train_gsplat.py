@@ -41,6 +41,7 @@ import scaffold as scaffold_mod  # noqa: E402
 import depth_prior  # noqa: E402
 import naming  # noqa: E402
 import scene_fill  # noqa: E402
+import scene_coverage  # noqa: E402
 
 log = logging.getLogger("train")
 
@@ -129,6 +130,14 @@ DEFAULTS = {
     "scaffold_flat_every": 100,    # re-find which splats lie on a surface every N steps
     # A short video along the flight path, shifted slightly sideways: shows popping/floaters
     # that a still image or the held-out score can't.
+    # Coverage map (scene_coverage.py): how well real photos cover each part of the splat.
+    # Writes coverage_topdown.jpg (red = poorly covered, worst gaps numbered: fly there next
+    # time) and coverage.json; the Fixer step aims its AI fill-in at the same gaps.
+    "coverage": True,
+    "coverage_cameras": 256,       # training cameras used to measure it
+    "coverage_good_views": 6,      # sightings (close-up equivalent) for full coverage
+    "coverage_good_spread": 20.0,  # degrees between viewing directions for full coverage
+    "coverage_low": 0.3,           # below this = poorly covered
     "flythrough": True,
     "flythrough_offset": 0.03,     # sideways shift, x scene scale
     "test_every": 20,            # hold out every Nth image for an honest score (0 = off)
@@ -1180,6 +1189,18 @@ def train(data_dir: Path, out_dir: Path, s: dict):
              opacity_shares["below_0.005"] * 100, faint_share * 100,
              opacity_shares["above_0.3"] * 100)
 
+    # ---- coverage map: where real photos don't pin the splat down ---------------
+    coverage_info = None
+    if s.get("coverage", True):
+        try:
+            view = scene_coverage.SplatView(splats, s, sh_degree, bool(s["antialiased"]))
+            coverage_info = scene_coverage.report(
+                view, ds.frames, train_idx, s, out_dir, scaffold_up(ds),
+                inner_radius=(0.5 * sky_geom[1]) if sky_geom else None)
+            torch.cuda.empty_cache()
+        except Exception as e:  # noqa: BLE001  (a report is a nice-to-have)
+            log.warning("Coverage map skipped: %s: %s", type(e).__name__, e)
+
     # ---- fly-through video ---------------------------------------------------
     if s["flythrough"]:
         try:
@@ -1216,6 +1237,7 @@ def train(data_dir: Path, out_dir: Path, s: dict):
              "fill": fill_info,
              "faint_share": faint_share,
              "opacity_shares": opacity_shares,
+             "coverage": coverage_info,
              "scaffold": scaffold_info,
              "pose_refine": pose_info,
              "settings": {k: v for k, v in s.items() if not k.startswith("_")}}

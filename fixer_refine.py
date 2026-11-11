@@ -7,11 +7,18 @@ contains generated content, so keep the real-only splat alongside it).
      with every result (<name>/scene/: camera poses, which frames were used, settings).
   2. Load the finished .ply.
   3. Several rounds of:
+       - measure how well the real photos cover every part of the splat (scene_coverage.py);
        - pick camera positions the drone never had: shifted off the flight path and turned
-         towards angles between the cube faces, a little further out each round;
-       - render the splat there (this is where holes and smears show);
+         towards angles between the cube faces, a little further out each round. Most are
+         chosen because they look at poorly covered areas (the gaps); the rest at random;
+       - render the splat there (this is where holes and smears show), plus a coverage image;
        - NVIDIA Fixer (Cosmos-based single-step diffusion) cleans each render;
-       - keep training on the real photos plus these cleaned views (lower weight).
+       - score each fixed view: where real photos already pin the scene down, Fixer should
+         barely change the render; a view it changed a lot there is trusted less (or dropped);
+       - optionally Claude looks at the fixed views with the most made-up content and rejects
+         ones that invent objects or break the layout;
+       - keep training on the real photos plus these views (lower weight), learning from each
+         fixed view mostly in its gaps: well covered pixels are left to the real photos.
   4. Report held-out PSNR on real photos before/after (each round that makes the splat worse
      on real photos is undone), save preview triplets (render | Fixer | real photo of the same
      surfaces) and the refined .ply.
@@ -45,6 +52,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import appearance  # noqa: E402
 import naming  # noqa: E402
+import scene_coverage  # noqa: E402
 import splat_pipeline as sp  # noqa: E402
 import train_gsplat as tg  # noqa: E402
 
@@ -71,6 +79,22 @@ FIXER_DEFAULTS = {
     "opacity_entropy": 0.003,  # push Gaussians to clearly solid or gone (clears hanging haze)
     "appearance_warmup": "auto",  # steps fitting colour corrections first ("auto": 2 per photo)
     "max_round_drop": 0.3,     # a round that costs more held-out PSNR than this is undone
+    # Aim at the gaps (scene_coverage.py). coverage false = the old behaviour: random views,
+    # learning from every pixel of every fixed view equally.
+    "coverage": True,
+    "coverage_share": 0.75,    # share of each round's views chosen for looking at gaps
+    "oversample": 4,           # candidate views tried per view kept
+    "max_gap_share": 0.7,      # skip views that are mostly gap (Fixer would invent the lot)
+    "gap_low": 0.3,            # coverage at or below this: a gap, learned from fully
+    "gap_high": 0.6,           # coverage at or above this: real photos rule; only ...
+    "observed_weight": 0.25,   # ... this much weight (still lets Fixer clean floaters there)
+    "conf_diff_ok": 0.04,      # Fixer changing well covered pixels by up to this: trusted
+    "conf_diff_bad": 0.15,     # ... by this much or more: not trusted at all
+    "min_view_conf": 0.2,      # views trusted less than this are dropped
+    "conf_no_anchor": 0.5,     # trust for a view with almost no well covered pixels
+    "review": "claude",        # "claude": Claude rejects fixed views that invent things (needs
+                               # an Anthropic key, ~$0.05 a round), "off"
+    "review_views": 12,        # views Claude checks per round (those with the most gap)
     "python": "/opt/fixer/bin/python",
     "model": "/opt/fixer/models/pretrained/pretrained_fixer.pkl",
 }
@@ -250,6 +274,101 @@ def nearest_photo(ds, train_idx: list[int], cam: dict) -> int:
     return best
 
 
+def pick_gap_cameras(view, cov, ds, train_idx: list[int], n: int, shift: float,
+                     up: np.ndarray, d: dict, rng: np.random.Generator):
+    """n novel cameras, most of them chosen because they look at gaps: `oversample` x n
+    candidates (each from a different real camera, so they stay varied), each scored by the
+    share of its low-resolution coverage image that is gap; coverage_share of the views are
+    the best-scoring ones (skipping views that are almost all gap: Fixer would invent the
+    lot), the rest are drawn at random. Returns (cameras, gap share of each, how many aimed)."""
+    cand = novel_cameras(ds, train_idx, n * max(1, int(d["oversample"])), shift, up, d, rng)
+    gaps = np.array([float((1 - view.coverage_image(c, cov, scale=0.25)).mean().item())
+                     for c in cand])
+    usable = np.nonzero((gaps > 0.01) & (gaps <= float(d["max_gap_share"])))[0]
+    n_gap = min(int(round(n * float(d["coverage_share"]))), len(usable))
+    chosen = [int(k) for k in usable[np.argsort(-gaps[usable])][:n_gap]]
+    taken = set(chosen)
+    rest = [k for k in range(len(cand)) if k not in taken]
+    if rest and len(chosen) < n:
+        chosen += list(rng.choice(rest, size=min(n - len(chosen), len(rest)), replace=False))
+    return [cand[k] for k in chosen], gaps[chosen], n_gap
+
+
+def view_confidence(fixed: np.ndarray, render: np.ndarray, observed: np.ndarray,
+                    d: dict) -> tuple[float, float | None]:
+    """(trust 0..1, mean change on well covered pixels). Where real photos pin the scene
+    down, the render is already right, so a good fix barely changes it there."""
+    if observed.mean() < 0.05:
+        return float(d["conf_no_anchor"]), None
+    diff = float(np.abs(fixed.astype(np.float32) - render.astype(np.float32))[observed].mean()
+                 / 255.0)
+    ok, bad = float(d["conf_diff_ok"]), float(d["conf_diff_bad"])
+    return float(np.clip(1 - (diff - ok) / max(bad - ok, 1e-6), 0, 1)), diff
+
+
+def tint_gaps(img_rgb: np.ndarray, weight: np.ndarray, floor: float) -> np.ndarray:
+    """The render with its gaps tinted red (how much the fill may change there)."""
+    g = np.clip((weight.astype(np.float32) - floor) / max(1 - floor, 1e-6), 0, 1)[..., None]
+    red = np.array([230, 40, 40], np.float32)
+    return (img_rgb * (1 - 0.45 * g) + red * 0.45 * g).astype(np.uint8)
+
+
+REVIEW_PROMPT = """You are checking AI-generated fill-in for a 3D Gaussian-splat reconstruction
+of a real place, built from drone photos. Each numbered tile shows one viewpoint the drone never
+flew: LEFT = the current splat rendered there, with RED TINT on areas the real photos did not
+cover well (gaps); RIGHT = the same view after an AI model (NVIDIA Fixer) cleaned it. Training
+will learn the RIGHT image mostly inside the red areas.
+
+Reject a tile if the AI fill would teach the scene something false: it invents objects that
+aren't there (furniture, plants, people, text, extra windows/doors), duplicates or moves things,
+changes the layout or the shape of surfaces, turns a smear into a solid object that clearly
+isn't in the left image, or fills a gap with content that doesn't continue its surroundings
+(e.g. sky where wall should continue, grass on paving). Keep it if the fill plausibly
+continues what is around it (brick continues as brick, paving as paving, foliage as foliage)
+or only cleans blur and specks. When unsure, keep it: a rejected view is just lost help.
+
+Reply with JSON only: {"reject": [tile numbers], "reasons": {"<number>": "<few words>"}}"""
+
+
+def review_views(d: dict, s: dict, items: list[dict], out_dir: Path, rnd: int) -> set[int]:
+    """Claude rejects fixed views that invent things. items: {"k", "left", "right"} (RGB).
+    Returns the rejected k's; any problem = nothing rejected (a run never fails over it)."""
+    if str(d.get("review", "off")).lower() != "claude" or not items:
+        return set()
+    try:
+        import scaffold_agent as sa
+        client, why = sa.make_client(s)
+        if client is None:
+            log.info("Fixer review skipped: %s", why)
+            return set()
+        tiles = []
+        for n, it in enumerate(items, 1):
+            pair = np.concatenate([sa._fit(it["left"], 448), sa._fit(it["right"], 448)], 1)
+            tiles.append(sa._caption(pair, f"tile {n}"))
+        content = [{"type": "text", "text": REVIEW_PROMPT}]
+        for k in range(0, len(tiles), 6):
+            content.append(sa._img_block(sa._sheet(tiles[k:k + 6], 2, 896)))
+        resp = client.messages.create(model=str(s.get("scaffold_model", "claude-opus-5-5")),
+                                      max_tokens=1500,
+                                      messages=[{"role": "user", "content": content}])
+        text = "".join(getattr(b, "text", "") for b in resp.content)
+        js = json.loads(text[text.index("{"):text.rindex("}") + 1])
+        bad = {int(x) for x in js.get("reject", []) if 1 <= int(x) <= len(items)}
+        rejected = {items[x - 1]["k"] for x in bad}
+        with open(out_dir / "fixer_review.md", "a") as f:
+            f.write(f"## Round {rnd}: Claude checked {len(items)} views, rejected {len(bad)}\n")
+            for x in sorted(bad):
+                f.write(f"- view {items[x - 1]['k']}: "
+                        f"{(js.get('reasons') or {}).get(str(x), '')}\n")
+            f.write("\n")
+        log.info("Round %d: Claude checked %d fixed views and rejected %d", rnd, len(items),
+                 len(bad))
+        return rejected
+    except Exception as e:  # noqa: BLE001
+        log.warning("Fixer review skipped: %s: %s", type(e).__name__, e)
+        return set()
+
+
 # --------------------------------------------------------------------------- #
 # Refinement
 # --------------------------------------------------------------------------- #
@@ -422,8 +541,12 @@ def refine(data_dir: Path, ply: Path, out_dir: Path, s: dict, d: dict) -> dict:
              "gate": "raw" if raw_gate else "corrected"}
     best = {"psnr": before_raw if raw_gate else before, "round": 0, "splats": snapshot()}
     picker = ReferencePicker(ds, train_idx, render_depth_small, d) if int(d["previews"]) else None
+    use_cov = bool(d.get("coverage", True))
+    view = scene_coverage.SplatView(splats, s, sh_degree, bool(s.get("antialiased")))
+    lo_c, hi_c, floor_c = float(d["gap_low"]), float(d["gap_high"]), float(d["observed_weight"])
     ref_scores: list[float] = []
-    novel: list[tuple[np.ndarray, dict, np.ndarray]] = []  # (fixed image, camera, render alpha)
+    # (fixed image, camera, render alpha, per-pixel weight, trust)
+    novel: list[tuple[np.ndarray, dict, np.ndarray, np.ndarray, float]] = []
     step = 0
     t0 = time.time()
     preview_dir = out_dir / "fixer_preview"
@@ -432,10 +555,22 @@ def refine(data_dir: Path, ply: Path, out_dir: Path, s: dict, d: dict) -> dict:
         for rnd in range(1, int(d["rounds"]) + 1):
             # ---- render novel views and fix them ---------------------------------------
             shift = float(d["max_shift"]) * rnd / int(d["rounds"])
-            cams = novel_cameras(ds, train_idx, int(d["views_per_round"]), shift, up, d, rng)
+            n_views = int(d["views_per_round"])
+            rinfo: dict = {}
+            if use_cov:
+                cov, cinfo = scene_coverage.gaussian_coverage(view, ds.frames, train_idx, s)
+                cams, cam_gaps, n_aimed = pick_gap_cameras(view, cov, ds, train_idx, n_views,
+                                                           shift, up, d, rng)
+                rinfo.update(aimed_at_gaps=n_aimed,
+                             mean_gap_share=round(float(np.mean(cam_gaps)), 4))
+                log.info("Round %d: %d of %d views aimed at gaps (mean gap share %.0f%%)", rnd,
+                         n_aimed, len(cams), 100 * float(np.mean(cam_gaps)))
+            else:
+                cov, cam_gaps = None, np.zeros(n_views)
+                cams = novel_cameras(ds, train_idx, n_views, shift, up, d, rng)
             rdir = work / f"round{rnd}"
             sp.reset_dir(rdir)
-            pairs, alphas = [], []
+            pairs, alphas, renders, weights, observed = [], [], [], [], []
             with torch.no_grad():
                 for k, cam in enumerate(cams):
                     want_ref = picker is not None and k < int(d["previews"])
@@ -443,6 +578,15 @@ def refine(data_dir: Path, ply: Path, out_dir: Path, s: dict, d: dict) -> dict:
                     img = (r[0, ..., :3].clamp(0, 1) * 255).byte().cpu().numpy()
                     alpha = a[0, ..., 0].float().cpu().numpy()
                     alphas.append(alpha)
+                    renders.append(img)
+                    if cov is not None:
+                        ci = view.coverage_image(cam, cov).cpu().numpy()
+                        weights.append(scene_coverage.gap_weight(ci, lo_c, hi_c, floor_c)
+                                       .astype(np.float16))
+                        observed.append(ci >= hi_c)
+                    else:
+                        weights.append(None)
+                        observed.append(None)
                     cv2.imwrite(str(rdir / f"{k:04d}_in.png"), cv2.cvtColor(img, cv2.COLOR_RGB2BGR))
                     pair = {"input": str(rdir / f"{k:04d}_in.png"),
                             "output": str(rdir / f"{k:04d}_fixed.png")}
@@ -457,13 +601,28 @@ def refine(data_dir: Path, ply: Path, out_dir: Path, s: dict, d: dict) -> dict:
                      rnd, int(d["rounds"]), len(cams), 100 * rnd / int(d["rounds"]))
             run_fixer(d, pairs, rdir)
             novel = []
+            fixed_rgb: dict[int, np.ndarray] = {}
+            confs: dict[int, float] = {}
+            n_low = 0
             for k, (cam, pair) in enumerate(zip(cams, pairs)):
                 fixed = cv2.imread(pair["output"])
                 if fixed is None:
                     continue
-                novel.append((cv2.cvtColor(fixed, cv2.COLOR_BGR2RGB), cam, alphas[k]))
+                if fixed.shape[:2] != renders[k].shape[:2]:
+                    fixed = cv2.resize(fixed, (renders[k].shape[1], renders[k].shape[0]),
+                                       interpolation=cv2.INTER_AREA)
+                frgb = cv2.cvtColor(fixed, cv2.COLOR_BGR2RGB)
+                conf = 1.0
+                if observed[k] is not None:
+                    conf, _ = view_confidence(frgb, renders[k], observed[k], d)
+                    if conf < float(d["min_view_conf"]):
+                        n_low += 1
+                        continue
+                fixed_rgb[k], confs[k] = frgb, conf
                 if k < int(d["previews"]):
-                    row = [cv2.imread(pair["input"]), fixed]
+                    left = renders[k] if weights[k] is None else \
+                        tint_gaps(renders[k], weights[k], floor_c)
+                    row = [cv2.cvtColor(left, cv2.COLOR_RGB2BGR), fixed]
                     if pair.get("ref"):
                         ref = cv2.imread(pair["ref"])  # square photo: fit, keep its shape
                         h = fixed.shape[0]
@@ -471,17 +630,37 @@ def refine(data_dir: Path, ply: Path, out_dir: Path, s: dict, d: dict) -> dict:
                         row.append(ref)
                     cv2.imwrite(str(preview_dir / f"round{rnd}_{k:02d}_render_fixer_photo.jpg"),
                                 np.concatenate(row, axis=1), [cv2.IMWRITE_JPEG_QUALITY, 90])
+            # Claude checks the views with the most made-up content
+            by_gap = sorted(fixed_rgb, key=lambda k: -float(cam_gaps[k]))
+            items = [{"k": k, "left": renders[k] if weights[k] is None else
+                      tint_gaps(renders[k], weights[k], floor_c), "right": fixed_rgb[k]}
+                     for k in by_gap[: int(d["review_views"])]] if use_cov else []
+            rejected = review_views(d, s, items, out_dir, rnd)
+            for k in sorted(fixed_rgb):
+                if k in rejected:
+                    continue
+                novel.append((fixed_rgb[k], cams[k], alphas[k], weights[k], confs[k]))
+            rinfo.update(dropped_low_trust=n_low, rejected_by_review=len(rejected),
+                         mean_trust=round(float(np.mean([confs[k] for k in confs])), 3)
+                         if confs else None)
+            if n_low or rejected:
+                log.info("Round %d: dropped %d fixed view(s) Fixer changed too much where real "
+                         "photos already cover the scene, %d rejected on review", rnd, n_low,
+                         len(rejected))
+            del renders, fixed_rgb
             if not novel:
-                raise RuntimeError("Fixer produced no images")
+                raise RuntimeError("Fixer produced no usable images")
 
             # ---- train on real photos + fixed novel views -------------------------------
             for _ in range(int(d["steps_per_round"])):
                 use_novel = random.random() < float(d["novel_ratio"])
+                trust = 1.0
                 if use_novel:
-                    img, fr, alpha = novel[random.randrange(len(novel))]
-                    mask, i = None, None
+                    img, fr, alpha, wmap, trust = novel[random.randrange(len(novel))]
+                    mask, i = wmap, None  # learn the fill mostly in the gaps
                     if float(d["alpha_mask"]) > 0:
-                        mask = alpha > float(d["alpha_mask"])
+                        am = alpha > float(d["alpha_mask"])
+                        mask = am if mask is None else mask * am
                 else:
                     i, img, mask, _ = loader.get()
                     fr = ds.frames[i]
@@ -498,7 +677,7 @@ def refine(data_dir: Path, ply: Path, out_dir: Path, s: dict, d: dict) -> dict:
                 loss = (1 - lam) * l1 + lam * (1 - ssim(o_l.permute(0, 3, 1, 2),
                                                          gt_l.permute(0, 3, 1, 2)))
                 if use_novel:
-                    loss = loss * float(d["novel_weight"])
+                    loss = loss * float(d["novel_weight"]) * trust
                 opa = torch.sigmoid(splats["opacities"])
                 loss = loss + s["opacity_reg"] * opa.mean()
                 loss = loss + s["scale_reg"] * torch.exp(splats["scales"]).mean()
@@ -524,7 +703,7 @@ def refine(data_dir: Path, ply: Path, out_dir: Path, s: dict, d: dict) -> dict:
                              (time.time() - t0) / 60)
             score_c, score_raw = evaluate(f"after round {rnd}")
             stats["rounds"].append({"round": rnd, "shift": shift, "views": len(novel),
-                                    "psnr": score_c, "psnr_raw": score_raw})
+                                    "psnr": score_c, "psnr_raw": score_raw, **rinfo})
             # Judge on what viewers see (no per-photo corrections) unless configured otherwise
             score = score_raw if raw_gate else score_c
             if score is None or best["psnr"] is None or score >= best["psnr"]:

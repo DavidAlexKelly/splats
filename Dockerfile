@@ -130,7 +130,7 @@ print('OK torch', torch.__version__, 'torchvision', torchvision.__version__, 'ke
 
 # ---- app ------------------------------------------------------------------------------
 WORKDIR /opt/app
-COPY splat_pipeline.py train_gsplat.py depth_prior.py mapanything_init.py foundry_app.py splat_stream.py selftest.py naming.py scene_fill.py appearance.py scaffold.py scaffold_agent.py scaffold_prompt.md retrain.py fixer_fix.py fixer_refine.py config.yaml README.md /opt/app/
+COPY splat_pipeline.py train_gsplat.py depth_prior.py mapanything_init.py foundry_app.py splat_stream.py selftest.py naming.py scene_fill.py scene_coverage.py appearance.py scaffold.py scaffold_agent.py scaffold_prompt.md retrain.py fixer_fix.py fixer_refine.py config.yaml README.md /opt/app/
 RUN if [ -x /opt/fixer/bin/python ]; then FIXER_ATTENTION=torch /opt/fixer/bin/python -c "import sys; sys.path.insert(0, '/opt/app'); import fixer_fix as f; f.prepare_imports(); __import__(f.PIX2PIX); print('Fixer code imports OK')"; fi
 
 # Foundry requires a non-root, numeric user: compute modules accept any (default 5000);

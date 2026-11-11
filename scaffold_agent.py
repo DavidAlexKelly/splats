@@ -11,9 +11,10 @@ Claude does the judging, through tools:
   merge             join candidates that are the same surface
   add_surface       a surface the pipeline missed, from a region in a photo (glass: fitted to
                     its frame, because depth sees through glass)
-  set_rules         solid / glass / soft / ignore, with material, confidence, reason
+  set_rules         solid / glass / window / soft / ignore, with material, confidence, reason
   review            the whole scaffold drawn over photos and from above (self-check)
-  finish            done (asks for one review first if anything changed since the last one)
+  finish            done (asks for one review first if anything changed since the last one,
+                    and once asks Claude to fix, not just report, what is still wrong)
 
 build() is the entry point the trainer calls. It reuses a saved decision when one matches
 this reconstruction, otherwise finds candidates, applies the automatic rules, and (when an
@@ -133,6 +134,7 @@ class Workspace:
         self.next_id = max([x["id"] for x in surfaces], default=-1) + 1
         self.changed_since_review = True
         self.reviews = 0
+        self.finish_checked = False
         self.log_lines: list[str] = []
         typ = surfaces[0]["tol"] / float(s["scaffold_tol"]) if surfaces else 1.0
         self.tol = float(s["scaffold_tol"]) * typ
@@ -171,6 +173,9 @@ class Workspace:
                  f"see_through {st.get('see_through', 0):.2f}",
                  f"hidden {st.get('hidden', 0):.2f}", f"views {st.get('views', 0)}",
                  f"auto={srf.get('auto_rule')}"]
+        if st.get("merged_from"):
+            parts.append(f"merged from {st['merged_from']}" if st.get("merged_by_claude")
+                         else f"(joined from {len(st['merged_from'])} stacked layers)")
         if srf.get("decided_by") == "claude":
             parts.append(f"RULE={srf['rule']}")
         return "  ".join(parts)
@@ -281,7 +286,7 @@ class Workspace:
         if pri is not None:
             import cv2
             d = cv2.resize(pri, (W, H), interpolation=cv2.INTER_NEAREST)[yi, xi]
-            visible = (d <= 0) | (z <= d * 1.10) | (srf.get("rule") == "glass")
+            visible = (d <= 0) | (z <= d * 1.10) | (srf.get("rule") in sc.SHEET_RULES)
             inside &= visible
         if not inside.any():
             return f"no visible part of #{sid} inside that region of {image}; nothing changed"
@@ -335,6 +340,7 @@ class Workspace:
         uv = np.stack([(cells - c) @ u, (cells - c) @ v], 1)
         label = sc.orientation(n, self.up, self.cams, c, float(self.s["scaffold_max_tilt_deg"]))
         new = sc.new_surface(self.next_id, n, c, self.up, self.tol, self.cell, uv, None, label)
+        new["thickness"] = max(sc.thickness(x) for x in srcs)
         self.next_id += 1
         g = sc.Geo(new)
         r, cc, ok = g.cell_of(uv)
@@ -344,8 +350,9 @@ class Workspace:
         pidx = sorted({int(p) for x in srcs for p in x.get("point_idx", [])})
         new["point_idx"] = pidx
         new["stats"] = {"points": len(pidx),
-                        "concentration": max(x["stats"].get("concentration", 0) for x in srcs),
-                        "merged_from": [x["id"] for x in srcs]}
+                        "concentration": round(sc.concentration(
+                            g, self.ds.points.astype(np.float64), sc.thickness(new)), 3),
+                        "merged_from": [x["id"] for x in srcs], "merged_by_claude": True}
         self.surfaces[:] = [x for x in self.surfaces if x["id"] not in {s_["id"] for s_ in srcs}]
         self.surfaces.append(new)
         self._restat(new)
@@ -458,8 +465,11 @@ class Workspace:
     def _restat(self, srf: dict):
         """Refresh a surface's photo stats without regrowing its outline."""
         st = srf.setdefault("stats", {})
-        keep = {k: st[k] for k in ("points", "concentration", "merged_from", "added_from")
-                if k in st}
+        keep = {k: st[k] for k in ("points", "concentration", "merged_from", "added_from",
+                                   "merged_by_claude") if k in st}
+        if "added_from" not in st:  # the outline changed: measure the points on it again
+            keep["concentration"] = round(sc.concentration(
+                sc.Geo(srf), self.ds.points.astype(np.float64), sc.thickness(srf)), 3)
         tmp = copy.deepcopy(srf)
         sc.photo_check([tmp], self.ds, self.load_prior, self.image_idx, self.s, grow=False)
         srf["stats"] = {**tmp["stats"], **keep}
@@ -639,6 +649,16 @@ def run_tool(ws: Workspace, name: str, args: dict) -> tuple[list[dict], bool]:
             return [text("Before finishing, check your scaffold below (colours = rules). Fix "
                          "anything wrong, then call finish again.\n" + ws.review_text()),
                     *[_img_block(_fit(im, 1200)) for im in imgs]], False
+        if not ws.finish_checked:
+            ws.finish_checked = True
+            return [text(
+                "One last check before finishing. Look again at your latest review and your "
+                "summary. For each thing that is still wrong (a rule on the wrong area, an "
+                "outline that runs into bushes or past the scene, a mixed surface left as one "
+                "rule, glass with the wrong rule), FIX it now with edit_region (remove/split), "
+                "merge or set_rules, then review. Only leave something as it is if the tools "
+                "can't fix it, and say why in the summary. If nothing is left to fix, call "
+                "finish again with the same summary.")], False
         ws.summary = str(args.get("summary", ""))
         return [text("ok")], True
     raise ValueError(f"unknown tool {name}")

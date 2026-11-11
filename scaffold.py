@@ -4,7 +4,9 @@ rule for how training treats it.
 
   find_candidates()   loose RANSAC on the SfM points: every flat patch worth a look, level,
                       upright or sloped, split into connected pieces. Over-finds on purpose:
-                      deciding what is real is the next step's job.
+                      deciding what is real is the next step's job. A surface that RANSAC
+                      found as several stacked, overlapping layers (a floor a little thicker
+                      or more tilted than the plane tolerance) is merged back into one.
   photo_check()       projects every candidate into a sample of photos and compares it with
                       each photo's depth estimate: how much of it the photos agree is there,
                       from how many viewpoints, how much they see THROUGH it (glass), how much
@@ -19,7 +21,11 @@ Rules:
           empty (kills floaters) and splats on it lie flat.
   glass   windows, glass doors: as solid, but "visible" comes from the outline rather than the
           depth estimate (which sees through glass), so reflections become paint on the
-          surface instead of blobs floating in front of or behind it.
+          surface instead of blobs floating in front of or behind it. For glass you
+          mostly see reflections in.
+  window  glass you mostly see THROUGH (a lit room behind a door at dusk, a shop window):
+          the space in front of it must stay empty, but what is behind keeps its own depth
+          (no depth override, no flattening), so the room keeps its parallax.
   soft    grass, gravel, low planting: only the space well in front must stay empty; never
           flattened.
   ignore  not used.
@@ -41,9 +47,10 @@ import numpy as np
 
 log = logging.getLogger("train")
 
-RULES = ("solid", "glass", "soft", "ignore")
-RULE_COLOURS = {"solid": (60, 170, 60), "glass": (230, 170, 40), "soft": (40, 200, 220),
-                "ignore": (150, 150, 150)}  # BGR
+RULES = ("solid", "glass", "window", "soft", "ignore")
+RULE_COLOURS = {"solid": (60, 170, 60), "glass": (230, 170, 40), "window": (200, 90, 190),
+                "soft": (40, 200, 220), "ignore": (150, 150, 150)}  # BGR
+SHEET_RULES = ("glass", "window")  # placed from the outline, win ties with their wall
 VERSION = 2
 
 
@@ -247,7 +254,6 @@ def find_candidates(points: np.ndarray, up: np.ndarray, cams: np.ndarray, s: dic
         n, c = _fit_plane(P[best])
         dist = np.abs((P - c) @ n)
         inl = dist < tol
-        conc = float(inl.sum() / max(int((dist < 4 * tol).sum()), 1))
         idx_all = remaining[inl]
         remaining = remaining[~(dist < 2 * tol)]  # don't find the same surface twice
         # split into connected pieces on the plane (two coplanar walls are two surfaces)
@@ -283,16 +289,182 @@ def find_candidates(points: np.ndarray, up: np.ndarray, cams: np.ndarray, s: dic
             g.mask = clean_mask(g.mask, close=1)
             g.save()
             d2 = np.abs((pts[pidx] - c2) @ n2)
-            srf["stats"] = {"points": int(len(pidx)), "concentration": round(conc, 3),
+            srf["stats"] = {"points": int(len(pidx)),
+                            "concentration": round(concentration(g, pts, tol), 3),
                             "median_offset": round(float(np.median(d2) / tol), 3),
                             "points_area": round(g.area(), 3)}
             out.append(srf)
             sid += 1
+    n_found = len(out)
+    out = merge_stacked(out, pts, up, cams, s)
+    n_joined = sum(len(x["stats"].get("merged_from", [])) for x in out)
+    cap = int(s["scaffold_candidates"])
+    out = sorted(out, key=lambda x: -x["stats"]["points"])[:cap]  # pieces can overshoot the cap
+    for k, srf in enumerate(out):
+        srf["id"] = k
     info = {"typical_distance": round(typ, 4), "tol": round(tol, 5), "cell": round(cell, 5),
-            "sfm_points": n_all, "candidates": len(out)}
+            "sfm_points": n_all, "candidates": len(out), "found": n_found,
+            "stacked_layers_joined": n_joined}
     log.info("Scaffold: %d candidate surface(s) from %d SfM points (plane thickness %.3g, "
              "outline cell %.3g)", len(out), n_all, tol, cell)
     return out, info
+
+
+def thickness(srf: dict) -> float:
+    """How thick the surface's points are: the plane tolerance, or more for a surface joined
+    from stacked layers (used to measure concentration fairly)."""
+    return max(float(srf["tol"]), float(srf.get("thickness") or 0))
+
+
+def concentration(g: "Geo", pts: np.ndarray, tol: float, coarse: int = 4) -> float:
+    """Share of the SfM points near this surface (within 4x the plane thickness) that lie ON
+    it (within the thickness). ~1 for paving or a wall, ~0.25 for a slice through a bush.
+    Measured per surface over its footprint on a coarse grid (coarse x the outline cell,
+    plus one coarse cell around): the outline's own cells exist only where on-plane points
+    are, so counting just inside them would make a sparse bush slice look flat."""
+    import cv2
+    if not g.mask.any():
+        return 0.0
+    d = pts - g.c
+    off = np.abs(d @ g.n)
+    band = off < 4 * tol
+    if not band.any():
+        return 0.0
+    q = d[band]
+    k = max(1, int(coarse))
+    H, W = g.shape
+    cm = np.zeros((-(-H // k) + 2, -(-W // k) + 2), np.uint8)
+    r, c = np.nonzero(g.mask)
+    cm[r // k + 1, c // k + 1] = 1
+    cm = cv2.dilate(cm, np.ones((3, 3), np.uint8)).astype(bool)
+    cc = np.floor(((q @ g.u) - g.o[0]) / (g.cell * k)).astype(np.int64) + 1
+    rr = np.floor(((q @ g.v) - g.o[1]) / (g.cell * k)).astype(np.int64) + 1
+    ok = (rr >= 0) & (rr < cm.shape[0]) & (cc >= 0) & (cc < cm.shape[1])
+    near = np.zeros(len(q), bool)
+    near[ok] = cm[rr[ok], cc[ok]]
+    on = near & (off[band] < tol)
+    return float(on.sum()) / max(int(near.sum()), 1)
+
+
+def _overlap_share(A: "Geo", B: "Geo") -> float:
+    """Share of the smaller outline that the other one covers (seen along the normal)."""
+    na, nb = int(A.mask.sum()), int(B.mask.sum())
+    if not na or not nb:
+        return 0.0
+    small, big = (A, B) if na <= nb else (B, A)
+    cc = small.cell_centres()
+    return float(big.inside(big.to_uv(cc)).sum()) / len(cc)
+
+
+def _continuous(A: "Geo", B: "Geo", tol: float, reach: int = 2, min_cells: int = 5) -> bool:
+    """A and B touch (within `reach` cells) and meet without a step where they touch: the
+    two planes are less than the plane thickness apart along the shared edge."""
+    import cv2
+    grown = cv2.dilate(B.mask.astype(np.uint8),
+                       np.ones((2 * reach + 1, 2 * reach + 1), np.uint8)).astype(bool)
+    cc = A.cell_centres()
+    if not len(cc):
+        return False
+    touch = cc[B.inside(B.to_uv(cc), grown)]
+    if len(touch) < min_cells:
+        return False
+    return float(np.median(np.abs((touch - B.c) @ B.n))) < tol
+
+
+def merge_stacked(surfaces: list[dict], pts: np.ndarray, up: np.ndarray, cams: np.ndarray,
+                  s: dict, max_angle_deg: float = 5.0, min_overlap: float = 0.2) -> list[dict]:
+    """RANSAC with a thin plane finds a floor that is a little thicker or more tilted than
+    the tolerance as several parallel layers on top of each other (their outlines then get
+    shared out cell by cell: a checkerboard). Join nearly parallel candidates that are close
+    together AND either overlap seen from above, or touch and meet without a step (a slightly
+    tilted RANSAC plane cuts the layers into side-by-side strips). A real step's two levels
+    sit side by side with a jump where they meet, so they stay apart; the joined surface must
+    also still be flat."""
+    if len(surfaces) < 2:
+        return surfaces
+    geos = [Geo(x) for x in surfaces]
+    cos_max = math.cos(math.radians(max_angle_deg))
+    parent = list(range(len(surfaces)))
+
+    def root(k):
+        while parent[k] != k:
+            parent[k] = parent[parent[k]]
+            k = parent[k]
+        return k
+
+    for a in range(len(surfaces)):
+        for b in range(a + 1, len(surfaces)):
+            A, B = geos[a], geos[b]
+            if surfaces[a]["label"] != surfaces[b]["label"] or abs(float(A.n @ B.n)) < cos_max:
+                continue
+            tol = max(float(surfaces[a]["tol"]), float(surfaces[b]["tol"]))
+            if abs(float((B.c - A.c) @ A.n)) > 4 * tol:
+                continue
+            if _overlap_share(A, B) >= min_overlap or _continuous(A, B, tol):
+                parent[root(b)] = root(a)
+    groups: dict[int, list[int]] = {}
+    for k in range(len(surfaces)):
+        groups.setdefault(root(k), []).append(k)
+    out = []
+    n_merged = 0
+    for members in groups.values():
+        if len(members) == 1:
+            out.append(surfaces[members[0]])
+            continue
+        merged = _join(surfaces, geos, members, pts, up, cams, s)
+        if merged is None:  # not flat once joined (a real step): keep them apart
+            out.extend(surfaces[k] for k in members)
+            continue
+        out.append(merged)
+        n_merged += len(members)
+    if n_merged:
+        log.info("Scaffold: joined %d stacked layer(s) of the same surface into %d",
+                 n_merged, sum(1 for x in out if "merged_from" in x["stats"]))
+    return out
+
+
+def _join(surfaces, geos, members, pts, up, cams, s) -> dict | None:
+    """One surface from several stacked candidates, or None if the result isn't flat."""
+    tol = max(float(surfaces[k]["tol"]) for k in members)
+    cell = min(float(surfaces[k]["cell"]) for k in members)
+    pidx = np.unique(np.concatenate([np.asarray(surfaces[k]["point_idx"], np.int64)
+                                     for k in members]))
+    P = pts[pidx]
+    n, c = _fit_plane(P)
+    n0 = geos[members[0]].n
+    if n @ n0 < 0:
+        n = -n
+    signed = (P - c) @ n
+    off = np.abs(signed)
+    # neighbouring layers were at most 4x the thickness apart; a joined surface much thicker
+    # than a few layers is not one flat surface
+    lo, hi = np.percentile(signed, [5, 95])
+    if float(hi - lo) > 6 * tol:
+        return None
+    cells = np.concatenate([geos[k].cell_centres() for k in members])
+    u, v = _basis(n, up)
+    uv_cells = np.stack([(cells - c) @ u, (cells - c) @ v], 1)
+    uv_pts = np.stack([(P - c) @ u, (P - c) @ v], 1)
+    label = orientation(n, up, cams, c, float(s["scaffold_max_tilt_deg"]))
+    srf = new_surface(-1, n, c, up, tol, cell, np.concatenate([uv_cells, uv_pts]), pidx, label)
+    g = Geo(srf)
+    for uv in (uv_cells, uv_pts):
+        r_, c_, ok = g.cell_of(uv)
+        g.mask[r_[ok], c_[ok]] = True
+    g.mask = clean_mask(g.mask, close=1)
+    g.save()
+    srf["thickness"] = max(tol, float(hi - lo) / 2)  # half the joined layers' spread
+    conc = concentration(g, pts, srf["thickness"])
+    # stacked layers of one surface hug the joined plane; parallel slices through a bush
+    # stay ~0.25 at any thickness, so they never become a fake slab
+    if conc < float(s["scaffold_min_concentration"]):
+        return None
+    srf["stats"] = {"points": int(len(pidx)),
+                    "concentration": round(conc, 3),
+                    "median_offset": round(float(np.median(off) / tol), 3),
+                    "points_area": round(g.area(), 3),
+                    "merged_from": [int(surfaces[k]["id"]) for k in members]}
+    return srf
 
 
 # --------------------------------------------------------------------------- #
@@ -561,7 +733,7 @@ class Scaffold:
     """Surfaces with a rule other than ignore. Per image: the nearest surface along every
     pixel ray (computed at 1/step resolution and cached)."""
 
-    RULE_CODE = {"solid": 0, "glass": 1, "soft": 2}
+    RULE_CODE = {"solid": 0, "glass": 1, "soft": 2, "window": 3}
 
     def __init__(self, surfaces: list[dict], s: dict):
         self.surfaces = [x for x in surfaces if x.get("rule") in self.RULE_CODE]
@@ -571,7 +743,7 @@ class Scaffold:
         self.agree = float(s["scaffold_agree"])
         self.margin = float(s["scaffold_margin"])
         self.soft_margin = float(s["scaffold_soft_margin"])
-        self._rule_of = np.array([self.RULE_CODE[r] for r in self.rules] + [3], np.uint8)
+        self._rule_of = np.array([self.RULE_CODE[r] for r in self.rules] + [255], np.uint8)
         self._cache: dict[str, tuple] = {}
 
     def __len__(self):
@@ -585,12 +757,12 @@ class Scaffold:
         o, dirs, _, _ = pixel_rays(fr, self.step)
         best = np.full(dirs.shape[:2], np.inf)
         ids = np.full(dirs.shape[:2], 255, np.uint8)
-        order = sorted(range(min(len(self.geos), 255)), key=lambda k: self.rules[k] == "glass")
-        for k in order:  # glass last, so it wins ties with the wall it sits in
+        order = sorted(range(min(len(self.geos), 255)),
+                       key=lambda k: self.rules[k] in SHEET_RULES)
+        for k in order:  # glass/window last, so it wins ties with the wall it sits in
             g = self.geos[k]
             z, inside, _ = hit(g, o, dirs)
-            # glass wins ties with the wall it sits in
-            slack = 2 * float(g.s["tol"]) if self.rules[k] == "glass" else 0.0
+            slack = 2 * float(g.s["tol"]) if self.rules[k] in SHEET_RULES else 0.0
             closer = inside & (z < best + slack)
             best = np.where(closer, z, best)
             ids[closer] = k
@@ -602,7 +774,8 @@ class Scaffold:
         """(depth, weight, limit, ids): the prior with exact surface depth where a solid or
         glass surface is visible; `limit` = the depth nothing may be rendered in front of
         (0 = no rule); `ids` = which surface owns each pixel (255 = none). limit and ids
-        are None when no surface is visible in this image."""
+        are None when no surface is visible in this image. A window only sets `limit`:
+        what is seen through it keeps the depth estimate's depth."""
         import cv2
         H, W = depth.shape
         low, lid = self.depth(fr)
@@ -616,10 +789,12 @@ class Scaffold:
         rel = np.where(valid, (depth - plane) / np.maximum(plane, 1e-9), 0)
         solid_vis = has & (rk == 0) & valid & (np.abs(rel) < self.agree)
         # glass: from the outline; only "something clearly in front of the glass" disqualifies
-        glass_vis = has & (rk == 1) & (~valid | (rel > -self.agree))
+        sheet = ~valid | (rel > -self.agree)
+        glass_vis = has & (rk == 1) & sheet
+        window_vis = has & (rk == 3) & sheet
         soft_vis = has & (rk == 2) & valid & (np.abs(rel) < self.soft_margin)
         exact = solid_vis | glass_vis
-        vis = exact | soft_vis
+        vis = exact | soft_vis | window_vis
         if not vis.any():
             return depth, weight, None, None
         d2 = np.where(exact, plane, depth).astype(np.float32)
@@ -641,7 +816,8 @@ def free_space_loss(rend_depth, limit):
 
 
 class FlatTerm:
-    """Splats lying on a solid or glass surface are pushed to be thin along its normal."""
+    """Splats lying on a solid or glass surface are pushed to be thin along its normal
+    (not windows: the room seen through one isn't flat)."""
 
     def __init__(self, scaffold: Scaffold, device):
         import torch
@@ -793,7 +969,7 @@ def draw_on_photo(img_rgb: np.ndarray, fr: dict, surfaces: list[dict], by_rule: 
                   prior: np.ndarray | None = None, alpha: float = 0.45,
                   ids_only: list[int] | None = None, show_hidden: bool = False) -> np.ndarray:
     """Photo (RGB, any size) with surfaces tinted, outlined and numbered. Parts the depth
-    estimate shows are hidden behind something are left untinted (except glass), or, with
+    estimate shows are hidden behind something are left untinted (except glass/windows), or, with
     show_hidden, drawn as stripes."""
     import cv2
     H, W = img_rgb.shape[:2]
@@ -801,14 +977,14 @@ def draw_on_photo(img_rgb: np.ndarray, fr: dict, surfaces: list[dict], by_rule: 
     o, dirs, uu, vv = pixel_rays(fr, step, W=W, H=H)
     best = np.full(dirs.shape[:2], np.inf)
     owner = np.full(dirs.shape[:2], -1, np.int32)
-    for k in sorted(range(len(surfaces)), key=lambda k: surfaces[k].get("rule") == "glass"):
+    for k in sorted(range(len(surfaces)), key=lambda k: surfaces[k].get("rule") in SHEET_RULES):
         srf = surfaces[k]
         if ids_only is not None and srf["id"] not in ids_only:
             continue
         if by_rule and srf.get("rule") in (None, "ignore"):
             continue
         z, inside, _ = hit(Geo(srf), o, dirs)
-        slack = 2 * float(srf["tol"]) if srf.get("rule") == "glass" else 0.0
+        slack = 2 * float(srf["tol"]) if srf.get("rule") in SHEET_RULES else 0.0
         closer = inside & (z < best + slack)
         best = np.where(closer, z, best)
         owner[closer] = k
@@ -818,7 +994,7 @@ def draw_on_photo(img_rgb: np.ndarray, fr: dict, surfaces: list[dict], by_rule: 
         pri = d[np.clip(vv, 0, H - 1), np.clip(uu, 0, W - 1)]
         hidden = (pri > 0) & np.isfinite(best) & (pri < best * 0.92) & (owner >= 0)
         for k, srf in enumerate(surfaces):
-            if srf.get("rule") == "glass":
+            if srf.get("rule") in SHEET_RULES:
                 hidden &= owner != k
     vis_owner = np.where(hidden, -1, owner)
     out = img_rgb.copy()

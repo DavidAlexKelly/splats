@@ -290,8 +290,11 @@ Three steps in the trainer (`scene_fill.py`, all on by default, all in `train.cu
   photos. Open sky and distant background draw there instead of rendering black or growing
   floaters. It's ordinary Gaussians in the `.ply`, so every viewer shows it.
 - **Floater cleanup** (`prune`): before export, removes near-invisible Gaussians, specks
-  hugging the flight path, isolated specks and oversized blobs. `ckpt.pt` keeps the
-  uncleaned model; the held-out score is measured on the cleaned one.
+  hugging the flight path, isolated specks and oversized blobs. If that costs more than
+  `prune_max_psnr_drop` held-out PSNR it is undone and a light pass (isolated specks and
+  oversized blobs only) is tried instead. `ckpt.pt` keeps the uncleaned model; the
+  held-out score is measured on the cleaned one. Trial scores are logged but kept out of
+  `eval_history`.
 
 `train_stats.json` → `fill` reports how many seeds, sky points and pruned Gaussians each
 run had. To compare, run once with a step off (e.g. `"train": {"custom": {"prune": false}}`
@@ -316,10 +319,14 @@ in `CONFIG_OVERRIDES`) - the transform publishes it as the next `_vN`.
 
 Four things aimed at the flicker and blobs you see when you move around a splat:
 
-- **Solid or gone** (`opacity_entropy`, from 60% of training): pushes every Gaussian to be
-  clearly opaque or clearly invisible. Thin see-through layers are what "pop" as a viewer
-  re-sorts them. `train_stats.json` → `faint_share` is the share still see-through (lower is
-  better; it was ~37% before this).
+- **Solid or gone** (`opacity_entropy`, from 60% of training until MCMC stops relocating at
+  85%, `opacity_entropy_end`): pushes every Gaussian to be clearly opaque or clearly
+  invisible. Thin see-through layers are what "pop" as a viewer re-sorts them. It stops when
+  relocation stops because after that nothing recycles the Gaussians it pushes to ~0: on
+  patio, running it to the end left 61% of the 3M Gaussians below 0.005 opacity, and
+  removing them still cost 1.4 dB. `train_stats.json` → `opacity_shares` gives the
+  near-invisible / see-through / solid split; `faint_share` is the see-through part (lower
+  is better).
 - **Camera refinement** (`pose_opt`): one tiny correction per 360 frame, shared by its six
   cube faces so the rig stays rigid. Fixes slight pose errors that show as doubled edges and
   ghosts. `train_stats.json` → `pose_refine` says how much the cameras moved (normally well
@@ -337,7 +344,9 @@ scores and still images miss: compare it between runs.
 Before training, the pipeline finds 20-40 candidate flat surfaces in the SfM points (level,
 upright and sloped, split into connected pieces) and checks each one against every sampled
 photo's depth estimate: how much of it the photos agree is there, how much they see
-*through* it (glass), how much is hidden. Photo agreement also fills in each surface's real
+*through* it (glass), how much is hidden. A floor that the points show as several thin
+layers on top of each other (slightly thicker or more tilted than the plane tolerance) is
+joined back into one candidate first, so it isn't shared out between layers cell by cell. Photo agreement also fills in each surface's real
 outline where a plain surface has few SfM points.
 
 Then **Claude reviews the candidates** (when the pod has an Anthropic API key). It sees a
@@ -349,7 +358,8 @@ region of a photo, merge pieces of the same surface, add surfaces the pipeline m
 | rule | for | training |
 |---|---|---|
 | solid | paving, decking, walls, fences | exact depth where visible, nothing may float in front, splats lie flat |
-| glass | windows, glass doors | the same, placed from the outline; reflections become paint on the glass instead of blobs |
+| glass | windows, glass doors you mostly see reflections in | the same, placed from the outline; reflections become paint on the glass instead of blobs |
+| window | glass you mostly see through (a lit room at dusk) | only the space in front must stay empty; the room behind keeps its own depth and parallax |
 | soft | grass, gravel, low planting | only the space well in front must stay empty; never flattened |
 | ignore | bushes, trees, furniture, anything uncertain | nothing |
 

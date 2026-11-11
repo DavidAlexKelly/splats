@@ -80,6 +80,10 @@ DEFAULTS = {
     # Thin see-through layers are what flickers ("pops") as a viewer re-sorts them.
     "opacity_entropy": 0.002,
     "opacity_entropy_start": 0.6,  # fraction of training before it starts (ramps in over 10%)
+    # ... and when it stops. 0 = when MCMC stops relocating (85%): after that nothing recycles
+    # the Gaussians it pushes to ~0 (on patio 61% ended below 0.005 opacity yet still held
+    # 1.4 dB together). 1 = to the end, as before.
+    "opacity_entropy_end": 0.0,
     # Camera refinement: one small pose correction per 360 frame (shared by its cube faces, so
     # the rig stays rigid). Fixes slight pose errors that show up as doubled edges and ghosts.
     "pose_opt": False,           # off by default: on a rig solve it moved cameras ~0.03%
@@ -715,12 +719,15 @@ def train(data_dir: Path, out_dir: Path, s: dict):
                 for k in lrs}
 
     mcmc = s["strategy"] == "mcmc"
+    refine_stop = min(25000, int(iters * 0.85)) if mcmc else min(15000, iters // 2)
+    ent_end = float(s.get("opacity_entropy_end", 0.0) or 0.0)
+    if ent_end <= 0:  # auto: only while MCMC still recycles what it pushes to ~0
+        ent_end = refine_stop / max(iters - 1, 1) if mcmc else 1.0
     if mcmc:
-        strategy = MCMCStrategy(cap_max=int(s["cap_max"]),
-                                refine_stop_iter=min(25000, int(iters * 0.85)))
+        strategy = MCMCStrategy(cap_max=int(s["cap_max"]), refine_stop_iter=refine_stop)
         init_opa, init_scale = 0.5, 0.1
     elif s["strategy"] == "default":
-        strategy = DefaultStrategy(refine_stop_iter=min(15000, iters // 2))
+        strategy = DefaultStrategy(refine_stop_iter=refine_stop)
         init_opa, init_scale = 0.1, 1.0
     else:
         raise ValueError(f"Unknown strategy {s['strategy']}")
@@ -911,8 +918,9 @@ def train(data_dir: Path, out_dir: Path, s: dict):
     eval_history = []
 
     @torch.no_grad()
-    def evaluate(step, save_images, raw=False):
-        """Held-out PSNR. raw=True skips the per-photo corrections: what a viewer shows."""
+    def evaluate(step, save_images, raw=False, record=True):
+        """Held-out PSNR. raw=True skips the per-photo corrections: what a viewer shows.
+        record=False: a trial score (cleanup), kept out of eval_history."""
         if not test_idx:
             return None
         if save_images:
@@ -935,8 +943,10 @@ def train(data_dir: Path, out_dir: Path, s: dict):
         if raw:
             log.info("EVAL step %d: held-out PSNR %.2f without per-photo corrections", step, val)
             return val
-        eval_history.append({"step": step, "psnr": round(val, 3)})
-        log.info("EVAL step %d: held-out PSNR %.2f over %d unseen images", step, val, len(psnrs))
+        if record:
+            eval_history.append({"step": step, "psnr": round(val, 3)})
+        log.info("EVAL step %d: held-out PSNR %.2f over %d unseen images%s", step, val,
+                 len(psnrs), "" if record else " (trial)")
         return val
 
     def save_ckpt(step):
@@ -988,7 +998,7 @@ def train(data_dir: Path, out_dir: Path, s: dict):
                 loss = loss + s["scale_reg"] * torch.exp(splats["scales"]).abs().mean()
             frac_t = step / max(iters - 1, 1)
             ent_start = float(s["opacity_entropy_start"])
-            if float(s["opacity_entropy"]) > 0 and frac_t >= ent_start:
+            if float(s["opacity_entropy"]) > 0 and ent_start <= frac_t < ent_end:
                 w_ent = float(s["opacity_entropy"]) * min(1.0, (frac_t - ent_start) / 0.1)
                 oc = torch.sigmoid(splats["opacities"]).clamp(1e-4, 1 - 1e-4)
                 loss = loss - w_ent * (oc * oc.log() + (1 - oc) * (1 - oc).log()).mean()
@@ -1088,10 +1098,11 @@ def train(data_dir: Path, out_dir: Path, s: dict):
         # Cleanup must never cost quality: score before, try full then light cleanup, and
         # keep the first that stays within prune_max_psnr_drop of the unpruned score.
         with torch.no_grad():
-            base = evaluate(iters, save_images=False)
+            base = evaluate(iters, save_images=False, record=False)
             original = {k: v.detach().clone() for k, v in splats.items()}
             tol = float(s["prune_max_psnr_drop"])
             fill_info["prune"] = {"before_psnr": base, "applied": "none"}
+            tried = []
             for level in ("full", "light"):
                 keep, counts = scene_fill.prune_mask(
                     original["means"].cpu().numpy(), original["opacities"].cpu().numpy(),
@@ -1100,10 +1111,14 @@ def train(data_dir: Path, out_dir: Path, s: dict):
                     *(sky_geom if sky_geom else (None, None)), level=level)
                 if counts["removed"] == 0:
                     continue
+                if any(np.array_equal(keep, k) for k in tried):
+                    log.info("Floater cleanup (%s): same as a level already tried; skipped", level)
+                    continue
+                tried.append(keep)
                 keep_t = torch.from_numpy(keep).to(device)
                 for k in list(splats.keys()):
                     splats[k] = torch.nn.Parameter(original[k][keep_t])
-                score = evaluate(iters, save_images=False)
+                score = evaluate(iters, save_images=False, record=False)
                 if base is None or score is None or score >= base - tol:
                     fill_info["prune"] = {**counts, "level": level, "before_psnr": base,
                                           "after_psnr": score, "applied": level}
@@ -1157,7 +1172,13 @@ def train(data_dir: Path, out_dir: Path, s: dict):
     with torch.no_grad():
         opa = torch.sigmoid(splats["opacities"])
         faint_share = round(float(((opa > 0.005) & (opa < 0.3)).float().mean()), 4)
-    log.info("See-through Gaussians (opacity 0.005-0.3): %.1f%%", faint_share * 100)
+        opacity_shares = {"below_0.005": round(float((opa <= 0.005).float().mean()), 4),
+                          "0.005-0.3": faint_share,
+                          "above_0.3": round(float((opa >= 0.3).float().mean()), 4)}
+    log.info("Opacity of the exported Gaussians: %.1f%% near-invisible (<0.005), %.1f%% "
+             "see-through (0.005-0.3), %.1f%% solid (>=0.3)",
+             opacity_shares["below_0.005"] * 100, faint_share * 100,
+             opacity_shares["above_0.3"] * 100)
 
     # ---- fly-through video ---------------------------------------------------
     if s["flythrough"]:
@@ -1194,6 +1215,7 @@ def train(data_dir: Path, out_dir: Path, s: dict):
              "depth_prior": depth_summary,
              "fill": fill_info,
              "faint_share": faint_share,
+             "opacity_shares": opacity_shares,
              "scaffold": scaffold_info,
              "pose_refine": pose_info,
              "settings": {k: v for k, v in s.items() if not k.startswith("_")}}

@@ -151,8 +151,10 @@ def prune_mask(means: np.ndarray, opacity_logit: np.ndarray, scale_log: np.ndarr
                cam_centres: np.ndarray, scene_scale: float, s: dict,
                sky_centre=None, sky_radius: float | None = None, level: str = "full"):
     """Boolean keep-mask and per-rule counts.
-    level "full": all rules; "light": only isolated specks and oversized blobs.
-    Sky-shell Gaussians are never touched except when essentially invisible (< 0.005).
+    level "full": all rules; "light": only isolated specks and oversized blobs (no opacity
+    rule at all: with MCMC the near-invisible ones can still matter together).
+    Sky-shell Gaussians are never touched except, at "full", when essentially invisible
+    (< 0.005).
     NB with the MCMC strategy many Gaussians are faint but matter together, so the caller
     checks the held-out score and backs off if pruning hurts it."""
     from scipy.spatial import cKDTree
@@ -164,8 +166,10 @@ def prune_mask(means: np.ndarray, opacity_logit: np.ndarray, scale_log: np.ndarr
     if sky_centre is not None and sky_radius:
         sky = np.linalg.norm(means - sky_centre, axis=1) > 0.5 * sky_radius
     inner = ~sky
-    thr = float(s["prune_min_opacity"]) if level == "full" else 0.0
-    rule = (inner & (opa < thr)) | (opa < 0.005)
+    if level == "full":
+        rule = (inner & (opa < float(s["prune_min_opacity"]))) | (sky & (opa < 0.005))
+    else:
+        rule = np.zeros(n, bool)
     counts["low_opacity"] = int(rule.sum())
     keep &= ~rule
 

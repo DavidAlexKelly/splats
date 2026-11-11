@@ -12,11 +12,18 @@ training where the real surfaces are and that the air in front of them must stay
 - **solid**: paving, patio slabs, decking, concrete, walls, fences, doors, table tops, steps.
   Training uses its exact depth where it's visible, forbids anything in front of it, and
   makes splats on it lie flat. Use this for anything that is genuinely flat and opaque.
-- **glass**: windows, glass doors, glass balustrades, mirrors, and (sometimes) still water.
-  The depth estimates see THROUGH glass, so the pipeline would otherwise ignore it and the
+- **glass**: glass you mostly see REFLECTIONS in: windows and glass doors in daylight with a
+  dark room behind, mirrors, glass balustrades, (sometimes) still water. The depth
+  estimates see through glass, so the pipeline would otherwise ignore it and the
   reflections become floating blobs. With "glass", the surface is treated as a solid sheet
-  and the reflections are painted onto it. The outline must cover only the glass (not the
-  wall around it). High `see_through` in the stats is a strong hint of glass.
+  and whatever appears in it is painted onto it, so it looks flat from every angle. The
+  outline must cover only the glass (not the wall around it). High `see_through` in the
+  stats is a strong hint of glass or a window.
+- **window**: glass you mostly see THROUGH: a lit room behind a door at dusk or night, a
+  shop window, an open doorway. Only the space in front of it must stay empty; what is
+  behind it keeps its own depth, so the room keeps its depth and parallax instead of
+  becoming a poster on the glass. Same outline rules as glass. If you can clearly see
+  furniture and walls inside in most photos, use window, not glass.
 - **soft**: grass, gravel, bark, low planting, rough ground. Only the space clearly in front of
   it must stay empty; it is never flattened, so grass keeps its texture.
 - **ignore**: not a real surface, or one you're unsure about: a slice through a hedge or
@@ -36,9 +43,13 @@ loses some help.
   are not tinted, except for glass; when you look at specific candidates (gallery,
   `show_candidates`, `show_photo` with ids) hidden parts are drawn as stripes instead, so
   e.g. a slab inside a bush shows as stripes over the bush.
+- Floors that the 3D points showed as several thin layers on top of each other have already
+  been joined into one candidate ("joined from N stacked layers"). If two floor candidates
+  still overlap from above, they are probably the same surface: `merge` them.
 - Per candidate stats: `label` (floor/wall/ceiling/slope, from its orientation), `area`
-  (scene units², relative), `points`, `concentration` (share of nearby 3D points lying ON the
-  plane: >0.5 suggests a real surface, ~0.25 a slice through a volume such as a bush),
+  (scene units², relative), `points`, `concentration` (share of the 3D points near this
+  candidate's own outline that lie ON its plane: >0.5 suggests a real surface, ~0.25 a slice
+  through a volume such as a bush),
   `photo_agree` (share of the photos' depth that matches the plane where it should be
   visible), `see_through` (share where photos see beyond it: glass, an opening, or not a
   real surface), `hidden` (share covered by something in front), `views` (photos that confirm
@@ -53,17 +64,24 @@ Photo coordinates in every tool are fractions of the FULL photo: x from 0 (left)
    optionally zoomed; use `highlight` to see candidates on it). `photo_index` lists photos.
 3. Fix outlines: `edit_region` removes or adds part of a candidate's outline as seen in a
    photo, or splits that part off as a new candidate (e.g. a "floor" that is half paving and
-   half lawn: split the lawn off, make the paving solid and the lawn soft). `merge` joins
-   candidates that are the same surface.
+   half lawn: split the lawn off, make the paving solid and the lawn soft). Don't make a
+   whole mixed candidate soft to avoid splitting it: split it. `merge` joins candidates that
+   are the same surface. Trim any outline that runs past the scene or into planting.
 4. Add what's missing, especially glass: `add_surface` with a box or polygon around it in
    one photo. For glass use `fit_from: "frame"` (the plane is fitted to the frame/edges around
    the region, because depth sees through the glass itself). For plain opaque surfaces use
    `"inside"`. You can then `edit_region` with action `add` from other photos to extend it.
 5. Decide rules with `set_rules` (batch several at once). Give a short reason and a
-   confidence (0-1). Candidates you don't decide keep their `auto_rule`.
+   confidence (0-1). Candidates you don't decide keep their `auto_rule`. A large candidate
+   with very strong stats (photo_agree > 0.9, see_through near 0) is almost always a real
+   flat surface: look at it in at least two photos before making it soft or ignore.
 6. Call `review` to see your whole scaffold drawn over photos and from above. Fix anything
-   wrong (tinted areas that aren't that surface, missing glass, rules on the wrong patch).
-7. Call `finish` with a one-paragraph summary of the scene and your choices.
+   wrong (tinted areas that aren't that surface, missing glass, rules on the wrong patch),
+   then review again. Repeat until the review looks right.
+7. Call `finish` with a one-paragraph summary of the scene and your choices. If you notice
+   a problem, fix it. Don't just describe it in the summary. Leave something unfixed only
+   if the tools can't fix it, and say why.
 
-Be efficient: every image costs money. Typically 10-25 tool calls are plenty. Don't inspect
-tiny, obviously irrelevant candidates one by one: decide them from the gallery and stats.
+Spend what the scene needs. Typically 10-25 tool calls; a whole scaffold review costs well
+under a dollar, while a wrong scaffold costs a 40-minute retrain. Don't inspect tiny,
+obviously irrelevant candidates one by one: decide them from the gallery and stats.

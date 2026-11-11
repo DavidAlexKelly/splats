@@ -1,7 +1,7 @@
 {
   "video": "patio.mp4",
-  "source": "patio_v5",
-  "run_key": "ccbf340cb7759688",
+  "source": "patio_3M_claude",
+  "run_key": "da517a503a5c5395",
   "kind": "splat",
   "retrain": true,
   "decision": "",
@@ -13,5 +13,5 @@
     }
   },
   "status": "ok",
-  "finished": "2026-11-11 01:04:24"
+  "finished": "2026-11-11 14:32:02"
 }

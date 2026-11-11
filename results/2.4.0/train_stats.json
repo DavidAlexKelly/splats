@@ -2,48 +2,36 @@
   "iterations": 30000,
   "gaussians": 3000000,
   "dropped_non_finite": 0,
-  "minutes": 33.8,
-  "peak_vram_gb": 3.06,
+  "minutes": 33.6,
+  "peak_vram_gb": 3.17,
   "images_train": 1219,
   "images_heldout": 65,
-  "heldout_psnr": 28.284,
-  "heldout_psnr_raw": 27.325,
+  "heldout_psnr": 28.405,
+  "heldout_psnr_raw": 27.277,
   "eval_history": [
     {
       "step": 5000,
-      "psnr": 26.265
+      "psnr": 26.208
     },
     {
       "step": 10000,
-      "psnr": 26.948
+      "psnr": 26.879
     },
     {
       "step": 15000,
-      "psnr": 27.4
+      "psnr": 27.461
     },
     {
       "step": 20000,
-      "psnr": 27.547
+      "psnr": 27.325
     },
     {
       "step": 25000,
-      "psnr": 27.667
+      "psnr": 27.684
     },
     {
       "step": 30000,
-      "psnr": 28.284
-    },
-    {
-      "step": 30000,
-      "psnr": 26.888
-    },
-    {
-      "step": 30000,
-      "psnr": 26.888
-    },
-    {
-      "step": 30000,
-      "psnr": 28.284
+      "psnr": 28.405
     }
   ],
   "depth_prior": {
@@ -61,14 +49,19 @@
     "sky_shell": {
       "points": 100000,
       "radius": 119.0579,
-      "coloured": 98707
+      "coloured": 98706
     },
     "prune": {
-      "before_psnr": 28.283892488474386,
+      "before_psnr": 28.404556073041146,
       "applied": "none"
     }
   },
-  "faint_share": 0.2733,
+  "faint_share": 0.3696,
+  "opacity_shares": {
+    "below_0.005": 0.5107,
+    "0.005-0.3": 0.3696,
+    "above_0.3": 0.1197
+  },
   "scaffold": {
     "enabled": true,
     "fingerprint": "165095,3.714,6.168,-3.421,12.539,9.94,10.759,1,-0.0061,0.0018,-0.2231,-0.0018,0.0017,1,-0.1289,-0.0061,-1,0.0017,-0.0118,0,0,0,1",
@@ -77,73 +70,70 @@
       "tol": 0.14877,
       "cell": 0.22315,
       "sfm_points": 165095,
-      "candidates": 41
+      "candidates": 40,
+      "found": 41,
+      "stacked_layers_joined": 2
     },
     "source": "claude",
     "agent": {
       "used": true,
       "model": "claude-opus-5-5",
-      "turns": 7,
+      "turns": 13,
       "finished": true,
       "stopped": null,
-      "reviews": 1,
-      "summary": "The scene is a small paved patio behind a brick house, filmed at dusk. It has a large sliding glass door into a lit living room, and dark fences and dense trees and bushes around the other sides. I made 6 surfaces into rules and set everything else to ignore. **Solid:** the brick house wall (#0), after cutting off the part that ran into the bushes to the right of the door, plus the thin wall strip beside the door (#31). I also merged five overlapping floor patches (#38, #34, #4, #6, #36) into one solid paving surface (#42). **Glass:** the pipeline had missed the door, so I added it as a new surface (#41), fitted to the door frame, so the reflections and the view into the room get painted onto it instead of becoming floating blobs. **Soft:** the planting-bed ground under the bushes (#39, #40) and the mixed paving-and-bed area (#35). I didn't separate the paving inside #35, so part of it is treated as soft rather than solid; that loses some flattening there but carves nothing away. **Ignore:** the interior floor seen through the glass (#37), a small sliver by the door (#5), and the many sloped or wall-like cuts through foliage, trees and sky. Two things are still loose. From above, the house wall #0 still reaches well past the patio to the east, and a few small bits of it still sit on the bushes next to the door in some photos. I left both as they are.",
-      "input_tokens": 16,
-      "output_tokens": 2591,
-      "cache_write_tokens": 25987,
-      "cache_read_tokens": 114897,
-      "estimated_cost_usd": 0.285,
-      "seconds": 43.5
+      "reviews": 2,
+      "summary": "The scene is a small, enclosed back patio at dusk. It has dark brick-pattern paving, a brick house wall with a large sliding glass door into a lit living room, and planted beds, trees and slatted fences on the other sides. I set the house wall (#0) to solid. I split the sliding-door glass off it as a new candidate (#40), widened it to cover both panes, and set it to window, because the furnished, lit room behind is clearly visible and should keep its own depth. I also trimmed #0 back from the climbing plants beside the door. I merged four stacked floor candidates (#1, #9, #15, #16) into one paving surface (#41). It and the other paving floors (#4, #6, #26) are solid. I cut the parts of #4, #6 and #41 that ran into the planted beds so that the floor rule can't remove the plants. I set the leftovers to ignore: the door-sill fragment (#33), the room floor seen through the glass (#36), the thin sliver at the door frame (#34), and all the sloped or low-concentration candidates, which are slices through trees, hedges and sky. I didn't add the fences or the far rendered wall, because they're mostly hidden behind dense planting and a wrong solid rule would remove that planting. One thing is left as is: on the top-down map, #0 still runs past the east edge of the patio. Looking along the wall (v00/f00162), it does seem to be the house front carrying on, so the extension is probably real. That part is hidden behind bushes in the photos I checked, so I couldn't select it to cut it off.",
+      "input_tokens": 30,
+      "output_tokens": 7363,
+      "cache_write_tokens": 55889,
+      "cache_read_tokens": 506604,
+      "estimated_cost_usd": 0.787,
+      "seconds": 117.7
     },
     "rules": {
-      "solid": 3,
-      "glass": 1,
-      "soft": 3,
-      "ignore": 31
+      "solid": 5,
+      "glass": 0,
+      "window": 1,
+      "soft": 0,
+      "ignore": 32
     },
-    "flat_splats": 375706,
+    "flat_splats": 406222,
     "usage": [
       {
         "id": 0,
         "rule": "solid",
-        "pixels_checked": 404764125,
-        "share_in_front": 0.04131
+        "pixels_checked": 394106821,
+        "share_in_front": 0.03838
       },
       {
-        "id": 31,
+        "id": 4,
         "rule": "solid",
-        "pixels_checked": 3846959,
-        "share_in_front": 0.05671
+        "pixels_checked": 260904723,
+        "share_in_front": 0.03904
       },
       {
-        "id": 35,
-        "rule": "soft",
-        "pixels_checked": 295093864,
-        "share_in_front": 0.0043
+        "id": 6,
+        "rule": "solid",
+        "pixels_checked": 421654211,
+        "share_in_front": 0.0091
       },
       {
-        "id": 39,
-        "rule": "soft",
-        "pixels_checked": 474110938,
-        "share_in_front": 0.00113
+        "id": 26,
+        "rule": "solid",
+        "pixels_checked": 23466102,
+        "share_in_front": 0.06552
       },
       {
         "id": 40,
-        "rule": "soft",
-        "pixels_checked": 23737556,
-        "share_in_front": 0.00266
+        "rule": "window",
+        "pixels_checked": 346836801,
+        "share_in_front": 0.00452
       },
       {
         "id": 41,
-        "rule": "glass",
-        "pixels_checked": 348920352,
-        "share_in_front": 0.01615
-      },
-      {
-        "id": 42,
         "rule": "solid",
-        "pixels_checked": 740998022,
-        "share_in_front": 0.02229
+        "pixels_checked": 686163492,
+        "share_in_front": 0.02307
       }
     ]
   },
@@ -182,6 +172,7 @@
     "antialiased": true,
     "opacity_entropy": 0.002,
     "opacity_entropy_start": 0.6,
+    "opacity_entropy_end": 0,
     "pose_opt": false,
     "pose_lr": 1e-05,
     "pose_reg": 1e-06,

@@ -1,377 +1,389 @@
-00:23:39 INFO    Re-extracting 214 selected frames from patio.mp4
-00:23:39 INFO    $ ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=p=0 /workspace/videos/patio.mp4
-00:23:39 INFO    Video resolution 7680x3840
-00:23:39 INFO    $ ffmpeg -hide_banner -loglevel error -i /workspace/videos/patio.mp4 -vf fps=6 -q:v 2 /workspace/work/retrain_patio/patio/raw/%06d.jpg
-00:24:34 INFO    Extracted 427 frames
-00:24:51 INFO    Wrote 1284 images (214 frames x 6 views, cubemap layout, 1600px, f=800.0)
-00:24:51 INFO    [patio] extract: already done, skipping
-00:24:51 INFO    [patio] select: already done, skipping
-00:24:51 INFO    [patio] slice: already done, skipping
-00:24:51 INFO    [patio] sfm: already done, skipping
-00:24:51 INFO    [patio] gate: already done, skipping
-00:24:51 INFO    [patio] === train ===
-00:24:51 INFO    $ /opt/venv/bin/python /opt/app/train_gsplat.py --data /workspace/work/retrain_patio/patio --out /workspace/work/retrain_patio/patio/train --iterations 30000 --config /workspace/work/retrain_patio/retrain_config.yaml
-00:24:52 INFO      Settings: {"iterations": 30000, "strategy": "mcmc", "cap_max": 3000000, "sh_degree": 2, "sh_degree_interval": 1000, "downscale": 1, "ssim_lambda": 0.2, "opacity_reg": 0.01, "scale_reg": 0.01, "random_background": false, "packed": true, "cache_images": false, "loader_threads": 4, "log_every": 100, "save_every": 5000, "near_plane": 0.01, "seed": 42, "align": true, "up_axis": "+y", "world_scale": 1.0, "exposure": true, "exposure_lr": 0.001, "exposure_reg": 0.01, "bilagrid": false, "bilagrid_xy": 16, "bilagrid_luma": 8, "bilagrid_lr": 0.002, "bilagrid_tv": 10.0, "antialiased": true, "opacity_entropy": 0.002, "opacity_entropy_start": 0.6, "pose_opt": false, "pose_lr": 1e-05, "pose_reg": 1e-06, "pose_opt_start": 1000, "scaffold": true, "scaffold_mode": "claude", "scaffold_decision": "", "scaffold_redo": false, "scaffold_model": "claude-opus-5-5", "scaffold_max_cost": 3.0, "scaffold_max_turns": 40, "scaffold_thinking": 0, "scaffold_price_in": 5.0, "scaffold_price_out": 25.0, "scaffold_prompt": "", "scaffold_tol": 0.01, "scaffold_cell": 0.015, "scaffold_candidates": 40, "scaffold_cand_min_frac": 0.002, "scaffold_ransac_iters": 300, "scaffold_max_tilt_deg": 10, "scaffold_check_images": 48, "scaffold_check_step": 8, "scaffold_min_views": 3, "scaffold_min_area": 0.005, "scaffold_min_concentration": 0.5, "scaffold_photo_min": 0.5, "scaffold_res_step": 4, "scaffold_agree": 0.05, "scaffold_conf": 1.0, "scaffold_weight": 0.05, "scaffold_margin": 0.03, "scaffold_soft_margin": 0.15, "scaffold_flat_weight": 0.02, "scaffold_flat_start": 2000, "scaffold_flat_every": 100, "flythrough": true, "flythrough_offset": 0.03, "test_every": 20, "eval_every": 5000, "depth_prior": true, "depth_backend": "auto", "depth_model": "", "depth_process_res": 756, "depth_batch": 8, "depth_mode": "selective", "depth_min_weight": 0.15, "depth_weight": 0.1, "depth_end_ratio": 0.1, "depth_grad_weight": 1.0, "depth_min_points": 30, "depth_max_rel_error": 0.35, "depth_seed": true, "depth_seed_max_points": 300000, "depth_seed_min_weight": 0.5, "depth_seed_stride": 8, "depth_seed_voxel": 0.004, "sky_shell": true, "sky_points": 100000, "sky_radius_mult": 3.0, "prune": true, "prune_min_opacity": 0.005, "prune_max_psnr_drop": 0.05, "prune_near_camera": 0.02, "prune_max_scale": 1.0, "prune_outlier_std": 3.0, "_views": [[0, 0], [90, 0], [180, 0], [270, 0], [0, 90], [0, -90]]}
-00:24:58 INFO      Estimated which points each photo saw (1284 photos, 4 s)
-00:24:58 INFO      Aligned scene upright (+y up, scale x1) from 1284 images; camera 'up' agreement: median 0.0 deg, 95% within 0.1 deg
-00:25:02 INFO      
-00:25:02 INFO      Loading weights:   0%|          | 0/287 [00:00<?, ?it/s]
-00:25:02 INFO      Loading weights: 100%|██████████| 287/287 [00:00<00:00, 7462.02it/s]
-00:25:02 INFO      Depth prior: predicting 1219 images with da2
-00:25:02 INFO      Depth prior: 8/1219
-00:25:13 INFO      Depth prior: 168/1219
-00:25:36 INFO      Depth prior: 328/1219
-00:26:05 INFO      Depth prior: 488/1219
-00:26:27 INFO      Depth prior: 648/1219
-00:26:33 INFO      Depth prior: 808/1219
-00:26:45 INFO      Depth prior: 968/1219
-00:26:59 INFO      Depth prior: 1128/1219
-00:27:09 INFO      Depth prior: 627/1219 training images supervised (592 rejected for poor SfM fit)
-00:27:09 INFO      Dataset: 1284 images (1600x1600) -> 1219 train / 65 held out, 165095 SfM points, scene scale 6.471
-00:27:23 INFO      Scaffold: 41 candidate surface(s) from 165095 SfM points (plane thickness 0.149, outline cell 0.223)
-00:27:29 INFO      Scaffold: checked 41 candidate(s) against 48 photo(s)
-00:27:29 INFO      Scaffold: split 26851 overlapping outline cell(s) between nearly parallel surfaces (each goes to the one the photos agree with)
-00:27:30 INFO      Scaffold: asking Claude (claude-opus-5-5) to review 41 candidate(s)
-00:27:39 INFO      HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
-00:27:39 INFO      Scaffold agent: turn 1, show_photo, ~$0.11 so far
-00:27:45 INFO      HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
-00:27:48 INFO      Scaffold agent: turn 2, edit_region, add_surface, ~$0.14 so far
-00:27:50 INFO      HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
-00:27:51 INFO      Scaffold agent: turn 3, show_photo, ~$0.16 so far
-00:27:54 INFO      HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
-00:27:54 INFO      Scaffold agent: turn 4, show_candidates, ~$0.18 so far
-00:27:59 INFO      HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
-00:28:00 INFO      Scaffold agent: turn 5, merge, ~$0.21 so far
-00:28:04 INFO      HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
-00:28:06 INFO      Scaffold agent: turn 6, set_rules, review, ~$0.24 so far
-00:28:14 INFO      HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
-00:28:14 INFO      Scaffold agent: turn 7, finish, ~$0.28 so far
-00:28:16 INFO      Scaffold: Claude finished in 7 turn(s), 44 s, ~$0.28
-00:28:16 INFO      Scaffold (claude): 3 solid, 1 glass, 3 soft, 31 ignore
-00:30:13 INFO      Depth seeding: 300000 extra starting Gaussians in weakly observed areas (627 images)
-00:30:25 INFO      Sky shell: 100000 Gaussians on a sphere of radius 119.06 (98707 coloured from photos)
-00:30:26 INFO      Initialised 565095 Gaussians: 165095 from SfM points, 300000 depth seeds, 100000 sky shell
-00:30:33 INFO      step    100/30000  loss 0.1225  psnr 20.24  depth 0.8205  gaussians 565095  15.5 it/s  vram 1.2 GB  eta 32 min
-00:30:38 INFO      step    200/30000  loss 0.1514  psnr 19.61  depth 0.8017  gaussians 565095  18.1 it/s  vram 1.2 GB  eta 27 min
-00:30:44 INFO      step    300/30000  loss 0.1250  psnr 19.80  depth 0.7379  gaussians 565095  18.2 it/s  vram 1.2 GB  eta 27 min
-00:30:49 INFO      step    400/30000  loss 0.0824  psnr 20.78  depth 0.6668  gaussians 565095  18.3 it/s  vram 1.2 GB  eta 27 min
-00:30:54 INFO      step    500/30000  loss 0.1998  psnr 20.76  depth 0.5496  gaussians 565095  18.3 it/s  vram 1.2 GB  eta 27 min
-00:31:00 INFO      step    600/30000  loss 0.1459  psnr 21.59  depth 0.4464  gaussians 565095  18.3 it/s  vram 1.2 GB  eta 27 min
-00:31:05 INFO      step    700/30000  loss 0.0721  psnr 22.56  depth 0.3753  gaussians 593349  18.4 it/s  vram 1.3 GB  eta 27 min
-00:31:11 INFO      step    800/30000  loss 0.0598  psnr 23.90  depth 0.2995  gaussians 623016  19.0 it/s  vram 1.3 GB  eta 26 min
-00:31:16 INFO      step    900/30000  loss 0.1373  psnr 24.62  depth 0.1852  gaussians 654166  18.8 it/s  vram 1.3 GB  eta 26 min
-00:31:21 INFO      step   1000/30000  loss 0.0711  psnr 24.37  depth 0.1381  gaussians 686874  18.6 it/s  vram 1.3 GB  eta 26 min
-00:31:27 INFO      step   1100/30000  loss 0.0447  psnr 24.99  depth 0.0948  gaussians 721217  18.7 it/s  vram 1.3 GB  eta 26 min
-00:31:32 INFO      step   1200/30000  loss 0.0671  psnr 25.49  depth 0.0727  gaussians 757277  18.7 it/s  vram 1.4 GB  eta 26 min
-00:31:37 INFO      step   1300/30000  loss 0.0934  psnr 24.16  depth 0.0694  gaussians 795140  18.8 it/s  vram 1.4 GB  eta 25 min
-00:31:43 INFO      step   1400/30000  loss 0.1066  psnr 23.70  depth 0.0792  gaussians 834897  18.5 it/s  vram 1.5 GB  eta 26 min
-00:31:48 INFO      step   1500/30000  loss 0.0222  psnr 23.37  depth 0.0751  gaussians 876641  18.4 it/s  vram 1.5 GB  eta 26 min
-00:31:54 INFO      step   1600/30000  loss 0.0876  psnr 24.37  depth 0.0566  gaussians 920473  18.1 it/s  vram 1.5 GB  eta 26 min
-00:31:59 INFO      step   1700/30000  loss 0.0565  psnr 23.89  depth 0.0638  gaussians 966496  18.3 it/s  vram 1.5 GB  eta 26 min
-00:32:05 INFO      step   1800/30000  loss 0.0336  psnr 24.78  depth 0.0508  gaussians 1014820  18.0 it/s  vram 1.6 GB  eta 26 min
-00:32:10 INFO      step   1900/30000  loss 0.0705  psnr 23.49  depth 0.0749  gaussians 1065561  18.1 it/s  vram 1.6 GB  eta 26 min
-00:32:16 INFO      step   2000/30000  loss 0.0960  psnr 24.35  depth 0.0616  gaussians 1118839  17.7 it/s  vram 1.6 GB  eta 26 min
-00:32:22 INFO      step   2100/30000  loss 0.0750  psnr 24.01  depth 0.0706  gaussians 1174780  17.0 it/s  vram 1.7 GB  eta 27 min
-00:32:28 INFO      step   2200/30000  loss 0.0697  psnr 23.96  depth 0.0597  gaussians 1233519  17.1 it/s  vram 1.7 GB  eta 27 min
-00:32:34 INFO      step   2300/30000  loss 0.0825  psnr 24.10  depth 0.0601  gaussians 1295194  16.8 it/s  vram 1.8 GB  eta 27 min
-00:32:39 INFO      step   2400/30000  loss 0.0815  psnr 24.53  depth 0.0659  gaussians 1359953  16.8 it/s  vram 1.8 GB  eta 27 min
-00:32:46 INFO      step   2500/30000  loss 0.0185  psnr 24.56  depth 0.0584  gaussians 1427950  16.6 it/s  vram 1.8 GB  eta 28 min
-00:32:52 INFO      step   2600/30000  loss 0.0648  psnr 24.23  depth 0.0662  gaussians 1499347  16.6 it/s  vram 1.9 GB  eta 28 min
-00:32:58 INFO      step   2700/30000  loss 0.1110  psnr 24.54  depth 0.0638  gaussians 1574314  16.4 it/s  vram 2.0 GB  eta 28 min
-00:33:04 INFO      step   2800/30000  loss 0.0895  psnr 24.94  depth 0.0599  gaussians 1653029  16.3 it/s  vram 2.0 GB  eta 28 min
-00:33:10 INFO      step   2900/30000  loss 0.0926  psnr 25.74  depth 0.0466  gaussians 1735680  16.2 it/s  vram 2.1 GB  eta 28 min
-00:33:16 INFO      step   3000/30000  loss 0.0850  psnr 24.97  depth 0.0596  gaussians 1822464  16.2 it/s  vram 2.1 GB  eta 28 min
-00:33:22 INFO      step   3100/30000  loss 0.0486  psnr 24.48  depth 0.0624  gaussians 1913587  16.1 it/s  vram 2.2 GB  eta 28 min
-00:33:29 INFO      step   3200/30000  loss 0.0534  psnr 25.62  depth 0.0558  gaussians 2009266  15.9 it/s  vram 2.3 GB  eta 28 min
-00:33:35 INFO      step   3300/30000  loss 0.0699  psnr 25.67  depth 0.0553  gaussians 2109729  15.8 it/s  vram 2.3 GB  eta 28 min
-00:33:41 INFO      step   3400/30000  loss 0.0619  psnr 25.35  depth 0.0578  gaussians 2215215  15.7 it/s  vram 2.3 GB  eta 28 min
-00:33:48 INFO      step   3500/30000  loss 0.0856  psnr 25.74  depth 0.0558  gaussians 2325975  15.3 it/s  vram 2.4 GB  eta 29 min
-00:33:54 INFO      step   3600/30000  loss 0.0610  psnr 25.71  depth 0.0480  gaussians 2442273  15.5 it/s  vram 2.5 GB  eta 28 min
-00:34:01 INFO      step   3700/30000  loss 0.0602  psnr 25.87  depth 0.0490  gaussians 2564386  15.3 it/s  vram 2.7 GB  eta 29 min
-00:34:07 INFO      step   3800/30000  loss 0.0635  psnr 24.60  depth 0.0585  gaussians 2692605  15.2 it/s  vram 2.7 GB  eta 29 min
-00:34:14 INFO      step   3900/30000  loss 0.0809  psnr 24.87  depth 0.0566  gaussians 2827235  14.9 it/s  vram 2.7 GB  eta 29 min
-00:34:21 INFO      step   4000/30000  loss 0.0224  psnr 25.40  depth 0.0550  gaussians 2968596  14.8 it/s  vram 3.1 GB  eta 29 min
-00:34:28 INFO      step   4100/30000  loss 0.0925  psnr 25.04  depth 0.0605  gaussians 3000000  14.7 it/s  vram 3.1 GB  eta 29 min
-00:34:34 INFO      step   4200/30000  loss 0.0602  psnr 25.10  depth 0.0572  gaussians 3000000  14.9 it/s  vram 3.1 GB  eta 29 min
-00:34:41 INFO      step   4300/30000  loss 0.0976  psnr 25.21  depth 0.0502  gaussians 3000000  14.8 it/s  vram 3.1 GB  eta 29 min
-00:34:48 INFO      step   4400/30000  loss 0.0327  psnr 25.41  depth 0.0539  gaussians 3000000  15.0 it/s  vram 3.1 GB  eta 29 min
-00:34:55 INFO      step   4500/30000  loss 0.0757  psnr 25.89  depth 0.0480  gaussians 3000000  15.0 it/s  vram 3.1 GB  eta 28 min
-00:35:01 INFO      step   4600/30000  loss 0.0866  psnr 26.09  depth 0.0519  gaussians 3000000  14.9 it/s  vram 3.1 GB  eta 28 min
-00:35:08 INFO      step   4700/30000  loss 0.0851  psnr 25.59  depth 0.0533  gaussians 3000000  14.9 it/s  vram 3.1 GB  eta 28 min
-00:35:15 INFO      step   4800/30000  loss 0.0464  psnr 25.35  depth 0.0535  gaussians 3000000  15.1 it/s  vram 3.1 GB  eta 28 min
-00:35:21 INFO      step   4900/30000  loss 0.0159  psnr 25.60  depth 0.0552  gaussians 3000000  15.0 it/s  vram 3.1 GB  eta 28 min
-00:35:28 INFO      step   5000/30000  loss 0.0619  psnr 25.94  depth 0.0506  gaussians 3000000  14.9 it/s  vram 3.1 GB  eta 28 min
-00:35:30 INFO      EVAL step 5000: held-out PSNR 26.27 over 65 unseen images
-00:35:40 INFO      step   5100/30000  loss 0.0647  psnr 25.51  depth 0.0543  gaussians 3000000  8.3 it/s  vram 3.1 GB  eta 50 min
-00:35:47 INFO      step   5200/30000  loss 0.0460  psnr 25.59  depth 0.0526  gaussians 3000000  15.1 it/s  vram 3.1 GB  eta 27 min
-00:35:53 INFO      step   5300/30000  loss 0.0618  psnr 26.23  depth 0.0499  gaussians 3000000  15.0 it/s  vram 3.1 GB  eta 28 min
-00:36:00 INFO      step   5400/30000  loss 0.0568  psnr 25.25  depth 0.0664  gaussians 3000000  15.1 it/s  vram 3.1 GB  eta 27 min
-00:36:07 INFO      step   5500/30000  loss 0.0389  psnr 25.59  depth 0.0545  gaussians 3000000  15.2 it/s  vram 3.1 GB  eta 27 min
-00:36:13 INFO      step   5600/30000  loss 0.0686  psnr 26.52  depth 0.0411  gaussians 3000000  15.1 it/s  vram 3.1 GB  eta 27 min
-00:36:20 INFO      step   5700/30000  loss 0.0731  psnr 25.73  depth 0.0553  gaussians 3000000  15.0 it/s  vram 3.1 GB  eta 27 min
-00:36:26 INFO      step   5800/30000  loss 0.0660  psnr 25.99  depth 0.0501  gaussians 3000000  15.2 it/s  vram 3.1 GB  eta 26 min
-00:36:33 INFO      step   5900/30000  loss 0.0509  psnr 25.76  depth 0.0572  gaussians 3000000  15.1 it/s  vram 3.1 GB  eta 27 min
-00:36:40 INFO      step   6000/30000  loss 0.0537  psnr 26.33  depth 0.0514  gaussians 3000000  15.0 it/s  vram 3.1 GB  eta 27 min
-00:36:46 INFO      step   6100/30000  loss 0.0726  psnr 25.81  depth 0.0459  gaussians 3000000  15.1 it/s  vram 3.1 GB  eta 26 min
-00:36:53 INFO      step   6200/30000  loss 0.0482  psnr 26.83  depth 0.0455  gaussians 3000000  15.1 it/s  vram 3.1 GB  eta 26 min
-00:37:00 INFO      step   6300/30000  loss 0.0206  psnr 26.12  depth 0.0506  gaussians 3000000  15.2 it/s  vram 3.1 GB  eta 26 min
-00:37:06 INFO      step   6400/30000  loss 0.0904  psnr 26.25  depth 0.0486  gaussians 3000000  15.1 it/s  vram 3.1 GB  eta 26 min
-00:37:13 INFO      step   6500/30000  loss 0.0432  psnr 26.29  depth 0.0566  gaussians 3000000  15.1 it/s  vram 3.1 GB  eta 26 min
-00:37:19 INFO      step   6600/30000  loss 0.0499  psnr 26.07  depth 0.0527  gaussians 3000000  15.1 it/s  vram 3.1 GB  eta 26 min
-00:37:26 INFO      step   6700/30000  loss 0.0524  psnr 26.24  depth 0.0510  gaussians 3000000  15.0 it/s  vram 3.1 GB  eta 26 min
-00:37:33 INFO      step   6800/30000  loss 0.0485  psnr 26.01  depth 0.0514  gaussians 3000000  15.2 it/s  vram 3.1 GB  eta 25 min
-00:37:39 INFO      step   6900/30000  loss 0.0817  psnr 25.93  depth 0.0604  gaussians 3000000  15.1 it/s  vram 3.1 GB  eta 26 min
-00:37:46 INFO      step   7000/30000  loss 0.0426  psnr 25.77  depth 0.0565  gaussians 3000000  15.2 it/s  vram 3.1 GB  eta 25 min
-00:37:52 INFO      step   7100/30000  loss 0.0547  psnr 26.46  depth 0.0479  gaussians 3000000  15.1 it/s  vram 3.1 GB  eta 25 min
-00:37:59 INFO      step   7200/30000  loss 0.0485  psnr 26.58  depth 0.0428  gaussians 3000000  15.2 it/s  vram 3.1 GB  eta 25 min
-00:38:06 INFO      step   7300/30000  loss 0.0520  psnr 25.69  depth 0.0611  gaussians 3000000  15.1 it/s  vram 3.1 GB  eta 25 min
-00:38:12 INFO      step   7400/30000  loss 0.0638  psnr 25.96  depth 0.0531  gaussians 3000000  15.3 it/s  vram 3.1 GB  eta 25 min
-00:38:19 INFO      step   7500/30000  loss 0.0550  psnr 25.97  depth 0.0527  gaussians 3000000  15.2 it/s  vram 3.1 GB  eta 25 min
-00:38:25 INFO      step   7600/30000  loss 0.0809  psnr 26.47  depth 0.0457  gaussians 3000000  15.0 it/s  vram 3.1 GB  eta 25 min
-00:38:32 INFO      step   7700/30000  loss 0.0528  psnr 26.01  depth 0.0573  gaussians 3000000  15.1 it/s  vram 3.1 GB  eta 25 min
-00:38:39 INFO      step   7800/30000  loss 0.0591  psnr 25.77  depth 0.0612  gaussians 3000000  15.0 it/s  vram 3.1 GB  eta 25 min
-00:38:45 INFO      step   7900/30000  loss 0.0676  psnr 26.72  depth 0.0486  gaussians 3000000  15.0 it/s  vram 3.1 GB  eta 25 min
-00:38:52 INFO      step   8000/30000  loss 0.0459  psnr 26.85  depth 0.0510  gaussians 3000000  14.9 it/s  vram 3.1 GB  eta 25 min
-00:38:59 INFO      step   8100/30000  loss 0.0327  psnr 26.76  depth 0.0475  gaussians 3000000  15.1 it/s  vram 3.1 GB  eta 24 min
-00:39:05 INFO      step   8200/30000  loss 0.0787  psnr 26.50  depth 0.0555  gaussians 3000000  15.1 it/s  vram 3.1 GB  eta 24 min
-00:39:12 INFO      step   8300/30000  loss 0.0611  psnr 26.47  depth 0.0502  gaussians 3000000  15.1 it/s  vram 3.1 GB  eta 24 min
-00:39:19 INFO      step   8400/30000  loss 0.0579  psnr 26.48  depth 0.0489  gaussians 3000000  15.0 it/s  vram 3.1 GB  eta 24 min
-00:39:25 INFO      step   8500/30000  loss 0.0609  psnr 26.63  depth 0.0491  gaussians 3000000  14.9 it/s  vram 3.1 GB  eta 24 min
-00:39:32 INFO      step   8600/30000  loss 0.0417  psnr 26.92  depth 0.0453  gaussians 3000000  15.0 it/s  vram 3.1 GB  eta 24 min
-00:39:39 INFO      step   8700/30000  loss 0.0497  psnr 26.43  depth 0.0582  gaussians 3000000  15.1 it/s  vram 3.1 GB  eta 24 min
-00:39:45 INFO      step   8800/30000  loss 0.0225  psnr 26.75  depth 0.0525  gaussians 3000000  15.2 it/s  vram 3.1 GB  eta 23 min
-00:39:52 INFO      step   8900/30000  loss 0.0393  psnr 25.77  depth 0.0606  gaussians 3000000  15.1 it/s  vram 3.1 GB  eta 23 min
-00:39:58 INFO      step   9000/30000  loss 0.0759  psnr 26.61  depth 0.0485  gaussians 3000000  15.2 it/s  vram 3.1 GB  eta 23 min
-00:40:05 INFO      step   9100/30000  loss 0.0538  psnr 26.32  depth 0.0486  gaussians 3000000  15.1 it/s  vram 3.1 GB  eta 23 min
-00:40:12 INFO      step   9200/30000  loss 0.0721  psnr 26.65  depth 0.0489  gaussians 3000000  15.1 it/s  vram 3.1 GB  eta 23 min
-00:40:18 INFO      step   9300/30000  loss 0.0486  psnr 26.46  depth 0.0563  gaussians 3000000  15.0 it/s  vram 3.1 GB  eta 23 min
-00:40:25 INFO      step   9400/30000  loss 0.0795  psnr 26.73  depth 0.0451  gaussians 3000000  15.0 it/s  vram 3.1 GB  eta 23 min
-00:40:32 INFO      step   9500/30000  loss 0.0745  psnr 26.65  depth 0.0530  gaussians 3000000  15.0 it/s  vram 3.1 GB  eta 23 min
-00:40:38 INFO      step   9600/30000  loss 0.0417  psnr 26.34  depth 0.0511  gaussians 3000000  15.0 it/s  vram 3.1 GB  eta 23 min
-00:40:45 INFO      step   9700/30000  loss 0.0534  psnr 26.31  depth 0.0534  gaussians 3000000  15.0 it/s  vram 3.1 GB  eta 23 min
-00:40:52 INFO      step   9800/30000  loss 0.0557  psnr 27.28  depth 0.0422  gaussians 3000000  15.0 it/s  vram 3.1 GB  eta 23 min
-00:40:58 INFO      step   9900/30000  loss 0.0578  psnr 26.71  depth 0.0563  gaussians 3000000  15.0 it/s  vram 3.1 GB  eta 22 min
-00:41:05 INFO      step  10000/30000  loss 0.0255  psnr 26.36  depth 0.0494  gaussians 3000000  15.2 it/s  vram 3.1 GB  eta 22 min
-00:41:07 INFO      EVAL step 10000: held-out PSNR 26.95 over 65 unseen images
-00:41:17 INFO      step  10100/30000  loss 0.0513  psnr 26.86  depth 0.0517  gaussians 3000000  8.4 it/s  vram 3.1 GB  eta 39 min
-00:41:24 INFO      step  10200/30000  loss 0.0745  psnr 26.85  depth 0.0479  gaussians 3000000  14.9 it/s  vram 3.1 GB  eta 22 min
-00:41:30 INFO      step  10300/30000  loss 0.0549  psnr 27.01  depth 0.0516  gaussians 3000000  15.0 it/s  vram 3.1 GB  eta 22 min
-00:41:37 INFO      step  10400/30000  loss 0.0524  psnr 26.45  depth 0.0582  gaussians 3000000  14.9 it/s  vram 3.1 GB  eta 22 min
-00:41:44 INFO      step  10500/30000  loss 0.0873  psnr 27.07  depth 0.0480  gaussians 3000000  14.9 it/s  vram 3.1 GB  eta 22 min
-00:41:50 INFO      step  10600/30000  loss 0.0755  psnr 26.30  depth 0.0552  gaussians 3000000  15.0 it/s  vram 3.1 GB  eta 22 min
-00:41:57 INFO      step  10700/30000  loss 0.0224  psnr 26.56  depth 0.0520  gaussians 3000000  14.9 it/s  vram 3.1 GB  eta 22 min
-00:42:04 INFO      step  10800/30000  loss 0.0148  psnr 27.24  depth 0.0457  gaussians 3000000  15.0 it/s  vram 3.1 GB  eta 21 min
-00:42:10 INFO      step  10900/30000  loss 0.0473  psnr 26.69  depth 0.0478  gaussians 3000000  15.1 it/s  vram 3.1 GB  eta 21 min
-00:42:17 INFO      step  11000/30000  loss 0.0534  psnr 26.60  depth 0.0559  gaussians 3000000  15.0 it/s  vram 3.1 GB  eta 21 min
-00:42:24 INFO      step  11100/30000  loss 0.0662  psnr 26.90  depth 0.0525  gaussians 3000000  15.1 it/s  vram 3.1 GB  eta 21 min
-00:42:30 INFO      step  11200/30000  loss 0.0527  psnr 26.81  depth 0.0509  gaussians 3000000  15.0 it/s  vram 3.1 GB  eta 21 min
-00:42:37 INFO      step  11300/30000  loss 0.0464  psnr 26.86  depth 0.0541  gaussians 3000000  14.9 it/s  vram 3.1 GB  eta 21 min
-00:42:44 INFO      step  11400/30000  loss 0.0187  psnr 27.15  depth 0.0505  gaussians 3000000  14.9 it/s  vram 3.1 GB  eta 21 min
-00:42:50 INFO      step  11500/30000  loss 0.0510  psnr 26.50  depth 0.0578  gaussians 3000000  15.0 it/s  vram 3.1 GB  eta 21 min
-00:42:57 INFO      step  11600/30000  loss 0.0750  psnr 27.11  depth 0.0469  gaussians 3000000  15.0 it/s  vram 3.1 GB  eta 20 min
-00:43:04 INFO      step  11700/30000  loss 0.0485  psnr 26.80  depth 0.0506  gaussians 3000000  14.9 it/s  vram 3.1 GB  eta 20 min
-00:43:10 INFO      step  11800/30000  loss 0.0626  psnr 27.17  depth 0.0477  gaussians 3000000  15.0 it/s  vram 3.1 GB  eta 20 min
-00:43:17 INFO      step  11900/30000  loss 0.0824  psnr 26.87  depth 0.0550  gaussians 3000000  14.9 it/s  vram 3.1 GB  eta 20 min
-00:43:24 INFO      step  12000/30000  loss 0.0487  psnr 26.71  depth 0.0517  gaussians 3000000  14.9 it/s  vram 3.1 GB  eta 20 min
-00:43:30 INFO      step  12100/30000  loss 0.0622  psnr 26.71  depth 0.0532  gaussians 3000000  15.0 it/s  vram 3.1 GB  eta 20 min
-00:43:37 INFO      step  12200/30000  loss 0.0220  psnr 27.27  depth 0.0481  gaussians 3000000  15.0 it/s  vram 3.1 GB  eta 20 min
-00:43:44 INFO      step  12300/30000  loss 0.0182  psnr 26.92  depth 0.0419  gaussians 3000000  15.0 it/s  vram 3.1 GB  eta 20 min
-00:43:50 INFO      step  12400/30000  loss 0.0514  psnr 26.19  depth 0.0579  gaussians 3000000  15.0 it/s  vram 3.1 GB  eta 20 min
-00:43:57 INFO      step  12500/30000  loss 0.0513  psnr 26.84  depth 0.0502  gaussians 3000000  14.9 it/s  vram 3.1 GB  eta 20 min
-00:44:04 INFO      step  12600/30000  loss 0.0479  psnr 26.44  depth 0.0589  gaussians 3000000  15.0 it/s  vram 3.1 GB  eta 19 min
-00:44:10 INFO      step  12700/30000  loss 0.0762  psnr 27.25  depth 0.0452  gaussians 3000000  15.0 it/s  vram 3.1 GB  eta 19 min
-00:44:17 INFO      step  12800/30000  loss 0.0116  psnr 27.08  depth 0.0510  gaussians 3000000  14.9 it/s  vram 3.1 GB  eta 19 min
-00:44:24 INFO      step  12900/30000  loss 0.0650  psnr 26.56  depth 0.0518  gaussians 3000000  15.0 it/s  vram 3.1 GB  eta 19 min
-00:44:31 INFO      step  13000/30000  loss 0.0791  psnr 26.83  depth 0.0555  gaussians 3000000  14.9 it/s  vram 3.1 GB  eta 19 min
-00:44:37 INFO      step  13100/30000  loss 0.0398  psnr 26.83  depth 0.0577  gaussians 3000000  15.0 it/s  vram 3.1 GB  eta 19 min
-00:44:44 INFO      step  13200/30000  loss 0.0675  psnr 26.76  depth 0.0542  gaussians 3000000  14.9 it/s  vram 3.1 GB  eta 19 min
-00:44:51 INFO      step  13300/30000  loss 0.0617  psnr 27.01  depth 0.0524  gaussians 3000000  14.9 it/s  vram 3.1 GB  eta 19 min
-00:44:57 INFO      step  13400/30000  loss 0.0689  psnr 27.63  depth 0.0461  gaussians 3000000  15.0 it/s  vram 3.1 GB  eta 18 min
-00:45:04 INFO      step  13500/30000  loss 0.0598  psnr 26.91  depth 0.0530  gaussians 3000000  15.0 it/s  vram 3.1 GB  eta 18 min
-00:45:11 INFO      step  13600/30000  loss 0.0635  psnr 26.91  depth 0.0525  gaussians 3000000  14.9 it/s  vram 3.1 GB  eta 18 min
-00:45:17 INFO      step  13700/30000  loss 0.0391  psnr 26.66  depth 0.0502  gaussians 3000000  15.0 it/s  vram 3.1 GB  eta 18 min
-00:45:24 INFO      step  13800/30000  loss 0.0392  psnr 27.36  depth 0.0516  gaussians 3000000  15.0 it/s  vram 3.1 GB  eta 18 min
-00:45:31 INFO      step  13900/30000  loss 0.0621  psnr 27.13  depth 0.0541  gaussians 3000000  14.9 it/s  vram 3.1 GB  eta 18 min
-00:45:37 INFO      step  14000/30000  loss 0.0518  psnr 27.07  depth 0.0572  gaussians 3000000  15.0 it/s  vram 3.1 GB  eta 18 min
-00:45:44 INFO      step  14100/30000  loss 0.0258  psnr 26.68  depth 0.0541  gaussians 3000000  15.0 it/s  vram 3.1 GB  eta 18 min
-00:45:51 INFO      step  14200/30000  loss 0.0465  psnr 26.74  depth 0.0508  gaussians 3000000  15.0 it/s  vram 3.1 GB  eta 18 min
-00:45:57 INFO      step  14300/30000  loss 0.0514  psnr 27.39  depth 0.0420  gaussians 3000000  15.0 it/s  vram 3.1 GB  eta 17 min
-00:46:04 INFO      step  14400/30000  loss 0.0675  psnr 27.41  depth 0.0485  gaussians 3000000  14.9 it/s  vram 3.1 GB  eta 17 min
-00:46:11 INFO      step  14500/30000  loss 0.0704  psnr 27.46  depth 0.0493  gaussians 3000000  14.9 it/s  vram 3.1 GB  eta 17 min
-00:46:17 INFO      step  14600/30000  loss 0.0647  psnr 27.13  depth 0.0540  gaussians 3000000  15.1 it/s  vram 3.1 GB  eta 17 min
-00:46:24 INFO      step  14700/30000  loss 0.0474  psnr 27.08  depth 0.0568  gaussians 3000000  15.1 it/s  vram 3.1 GB  eta 17 min
-00:46:31 INFO      step  14800/30000  loss 0.0325  psnr 27.13  depth 0.0549  gaussians 3000000  14.9 it/s  vram 3.1 GB  eta 17 min
-00:46:38 INFO      step  14900/30000  loss 0.0687  psnr 26.96  depth 0.0457  gaussians 3000000  15.0 it/s  vram 3.1 GB  eta 17 min
-00:46:44 INFO      step  15000/30000  loss 0.0347  psnr 27.87  depth 0.0488  gaussians 3000000  14.9 it/s  vram 3.1 GB  eta 17 min
-00:46:46 INFO      EVAL step 15000: held-out PSNR 27.40 over 65 unseen images
-00:46:56 INFO      step  15100/30000  loss 0.0517  psnr 27.40  depth 0.0480  gaussians 3000000  8.8 it/s  vram 3.1 GB  eta 28 min
-00:47:02 INFO      step  15200/30000  loss 0.0709  psnr 27.26  depth 0.0498  gaussians 3000000  15.0 it/s  vram 3.1 GB  eta 16 min
-00:47:09 INFO      step  15300/30000  loss 0.0400  psnr 27.29  depth 0.0535  gaussians 3000000  15.1 it/s  vram 3.1 GB  eta 16 min
-00:47:16 INFO      step  15400/30000  loss 0.0687  psnr 27.19  depth 0.0538  gaussians 3000000  15.0 it/s  vram 3.1 GB  eta 16 min
-00:47:22 INFO      step  15500/30000  loss 0.0574  psnr 26.90  depth 0.0508  gaussians 3000000  15.0 it/s  vram 3.1 GB  eta 16 min
-00:47:29 INFO      step  15600/30000  loss 0.0587  psnr 26.71  depth 0.0549  gaussians 3000000  15.0 it/s  vram 3.1 GB  eta 16 min
-00:47:36 INFO      step  15700/30000  loss 0.0578  psnr 26.97  depth 0.0637  gaussians 3000000  15.0 it/s  vram 3.1 GB  eta 16 min
-00:47:42 INFO      step  15800/30000  loss 0.0477  psnr 27.34  depth 0.0528  gaussians 3000000  14.9 it/s  vram 3.1 GB  eta 16 min
-00:47:49 INFO      step  15900/30000  loss 0.0531  psnr 27.11  depth 0.0507  gaussians 3000000  14.9 it/s  vram 3.1 GB  eta 16 min
-00:47:56 INFO      step  16000/30000  loss 0.0567  psnr 26.80  depth 0.0620  gaussians 3000000  14.9 it/s  vram 3.1 GB  eta 16 min
-00:48:02 INFO      step  16100/30000  loss 0.0618  psnr 27.24  depth 0.0454  gaussians 3000000  15.0 it/s  vram 3.1 GB  eta 15 min
-00:48:09 INFO      step  16200/30000  loss 0.0706  psnr 26.76  depth 0.0589  gaussians 3000000  14.8 it/s  vram 3.1 GB  eta 15 min
-00:48:16 INFO      step  16300/30000  loss 0.0717  psnr 26.97  depth 0.0608  gaussians 3000000  14.9 it/s  vram 3.1 GB  eta 15 min
-00:48:23 INFO      step  16400/30000  loss 0.0554  psnr 27.20  depth 0.0469  gaussians 3000000  15.0 it/s  vram 3.1 GB  eta 15 min
-00:48:29 INFO      step  16500/30000  loss 0.0206  psnr 27.89  depth 0.0494  gaussians 3000000  14.9 it/s  vram 3.1 GB  eta 15 min
-00:48:36 INFO      step  16600/30000  loss 0.0588  psnr 27.08  depth 0.0531  gaussians 3000000  14.9 it/s  vram 3.1 GB  eta 15 min
-00:48:43 INFO      step  16700/30000  loss 0.0614  psnr 27.37  depth 0.0524  gaussians 3000000  14.9 it/s  vram 3.1 GB  eta 15 min
-00:48:49 INFO      step  16800/30000  loss 0.0408  psnr 27.31  depth 0.0527  gaussians 3000000  14.9 it/s  vram 3.1 GB  eta 15 min
-00:48:56 INFO      step  16900/30000  loss 0.0513  psnr 27.30  depth 0.0451  gaussians 3000000  15.0 it/s  vram 3.1 GB  eta 15 min
-00:49:03 INFO      step  17000/30000  loss 0.0213  psnr 27.45  depth 0.0482  gaussians 3000000  14.9 it/s  vram 3.1 GB  eta 15 min
-00:49:10 INFO      step  17100/30000  loss 0.0133  psnr 26.91  depth 0.0587  gaussians 3000000  14.8 it/s  vram 3.1 GB  eta 14 min
-00:49:16 INFO      step  17200/30000  loss 0.0693  psnr 27.44  depth 0.0599  gaussians 3000000  14.9 it/s  vram 3.1 GB  eta 14 min
-00:49:23 INFO      step  17300/30000  loss 0.0670  psnr 27.46  depth 0.0408  gaussians 3000000  15.0 it/s  vram 3.1 GB  eta 14 min
-00:49:30 INFO      step  17400/30000  loss 0.0414  psnr 27.04  depth 0.0596  gaussians 3000000  15.0 it/s  vram 3.1 GB  eta 14 min
-00:49:36 INFO      step  17500/30000  loss 0.0644  psnr 27.09  depth 0.0587  gaussians 3000000  14.8 it/s  vram 3.1 GB  eta 14 min
-00:49:43 INFO      step  17600/30000  loss 0.0478  psnr 27.26  depth 0.0506  gaussians 3000000  15.0 it/s  vram 3.1 GB  eta 14 min
-00:49:50 INFO      step  17700/30000  loss 0.0436  psnr 27.37  depth 0.0505  gaussians 3000000  14.9 it/s  vram 3.1 GB  eta 14 min
-00:49:57 INFO      step  17800/30000  loss 0.0823  psnr 27.01  depth 0.0567  gaussians 3000000  14.8 it/s  vram 3.1 GB  eta 14 min
-00:50:03 INFO      step  17900/30000  loss 0.0242  psnr 27.22  depth 0.0557  gaussians 3000000  14.8 it/s  vram 3.1 GB  eta 14 min
-00:50:10 INFO      step  18000/30000  loss 0.0635  psnr 27.99  depth 0.0460  gaussians 3000000  14.8 it/s  vram 3.1 GB  eta 14 min
-00:50:17 INFO      step  18100/30000  loss 0.0596  psnr 26.92  depth 0.0579  gaussians 3000000  14.4 it/s  vram 3.1 GB  eta 14 min
-00:50:24 INFO      step  18200/30000  loss 0.0203  psnr 27.14  depth 0.0529  gaussians 3000000  14.7 it/s  vram 3.1 GB  eta 13 min
-00:50:30 INFO      step  18300/30000  loss 0.0400  psnr 27.64  depth 0.0520  gaussians 3000000  14.8 it/s  vram 3.1 GB  eta 13 min
-00:50:37 INFO      step  18400/30000  loss 0.0623  psnr 27.34  depth 0.0581  gaussians 3000000  14.7 it/s  vram 3.1 GB  eta 13 min
-00:50:44 INFO      step  18500/30000  loss 0.0690  psnr 27.67  depth 0.0573  gaussians 3000000  14.6 it/s  vram 3.1 GB  eta 13 min
-00:50:51 INFO      step  18600/30000  loss 0.0403  psnr 27.27  depth 0.0566  gaussians 3000000  14.8 it/s  vram 3.1 GB  eta 13 min
-00:50:58 INFO      step  18700/30000  loss 0.0580  psnr 26.96  depth 0.0540  gaussians 3000000  14.9 it/s  vram 3.1 GB  eta 13 min
-00:51:04 INFO      step  18800/30000  loss 0.0250  psnr 27.46  depth 0.0554  gaussians 3000000  14.8 it/s  vram 3.1 GB  eta 13 min
-00:51:11 INFO      step  18900/30000  loss 0.0493  psnr 27.19  depth 0.0530  gaussians 3000000  14.8 it/s  vram 3.1 GB  eta 12 min
-00:51:18 INFO      step  19000/30000  loss 0.0470  psnr 27.57  depth 0.0476  gaussians 3000000  14.7 it/s  vram 3.1 GB  eta 12 min
-00:51:25 INFO      step  19100/30000  loss 0.0388  psnr 27.17  depth 0.0548  gaussians 3000000  14.8 it/s  vram 3.1 GB  eta 12 min
-00:51:31 INFO      step  19200/30000  loss 0.0458  psnr 27.02  depth 0.0595  gaussians 3000000  14.8 it/s  vram 3.1 GB  eta 12 min
-00:51:38 INFO      step  19300/30000  loss 0.0763  psnr 26.71  depth 0.0613  gaussians 3000000  14.9 it/s  vram 3.1 GB  eta 12 min
-00:51:45 INFO      step  19400/30000  loss 0.0364  psnr 27.04  depth 0.0596  gaussians 3000000  14.7 it/s  vram 3.1 GB  eta 12 min
-00:51:52 INFO      step  19500/30000  loss 0.0333  psnr 27.48  depth 0.0516  gaussians 3000000  14.7 it/s  vram 3.1 GB  eta 12 min
-00:51:59 INFO      step  19600/30000  loss 0.0614  psnr 26.57  depth 0.0684  gaussians 3000000  14.6 it/s  vram 3.1 GB  eta 12 min
-00:52:05 INFO      step  19700/30000  loss 0.0526  psnr 26.92  depth 0.0584  gaussians 3000000  14.6 it/s  vram 3.1 GB  eta 12 min
-00:52:12 INFO      step  19800/30000  loss 0.0811  psnr 27.35  depth 0.0579  gaussians 3000000  14.9 it/s  vram 3.1 GB  eta 11 min
-00:52:19 INFO      step  19900/30000  loss 0.0370  psnr 26.82  depth 0.0623  gaussians 3000000  14.7 it/s  vram 3.1 GB  eta 11 min
-00:52:26 INFO      step  20000/30000  loss 0.0223  psnr 27.78  depth 0.0496  gaussians 3000000  14.7 it/s  vram 3.1 GB  eta 11 min
-00:52:28 INFO      EVAL step 20000: held-out PSNR 27.55 over 65 unseen images
-00:52:38 INFO      step  20100/30000  loss 0.0488  psnr 27.52  depth 0.0554  gaussians 3000000  8.4 it/s  vram 3.1 GB  eta 20 min
-00:52:44 INFO      step  20200/30000  loss 0.0702  psnr 27.14  depth 0.0589  gaussians 3000000  14.8 it/s  vram 3.1 GB  eta 11 min
-00:52:51 INFO      step  20300/30000  loss 0.0413  psnr 27.43  depth 0.0508  gaussians 3000000  14.7 it/s  vram 3.1 GB  eta 11 min
-00:52:58 INFO      step  20400/30000  loss 0.0337  psnr 27.32  depth 0.0606  gaussians 3000000  14.7 it/s  vram 3.1 GB  eta 11 min
-00:53:05 INFO      step  20500/30000  loss 0.0349  psnr 27.63  depth 0.0589  gaussians 3000000  14.7 it/s  vram 3.1 GB  eta 11 min
-00:53:12 INFO      step  20600/30000  loss 0.0505  psnr 27.03  depth 0.0624  gaussians 3000000  14.7 it/s  vram 3.1 GB  eta 11 min
-00:53:18 INFO      step  20700/30000  loss 0.0310  psnr 27.59  depth 0.0483  gaussians 3000000  14.7 it/s  vram 3.1 GB  eta 11 min
-00:53:25 INFO      step  20800/30000  loss 0.0606  psnr 27.29  depth 0.0593  gaussians 3000000  14.6 it/s  vram 3.1 GB  eta 10 min
-00:53:32 INFO      step  20900/30000  loss 0.0513  psnr 27.84  depth 0.0418  gaussians 3000000  14.9 it/s  vram 3.1 GB  eta 10 min
-00:53:39 INFO      step  21000/30000  loss 0.0570  psnr 27.56  depth 0.0554  gaussians 3000000  14.7 it/s  vram 3.1 GB  eta 10 min
-00:53:46 INFO      step  21100/30000  loss 0.0405  psnr 27.00  depth 0.0689  gaussians 3000000  14.7 it/s  vram 3.1 GB  eta 10 min
-00:53:52 INFO      step  21200/30000  loss 0.0545  psnr 27.16  depth 0.0641  gaussians 3000000  14.7 it/s  vram 3.1 GB  eta 10 min
-00:53:59 INFO      step  21300/30000  loss 0.0500  psnr 26.61  depth 0.0705  gaussians 3000000  14.8 it/s  vram 3.1 GB  eta 10 min
-00:54:06 INFO      step  21400/30000  loss 0.0521  psnr 27.09  depth 0.0551  gaussians 3000000  14.8 it/s  vram 3.1 GB  eta 10 min
-00:54:13 INFO      step  21500/30000  loss 0.0441  psnr 27.11  depth 0.0585  gaussians 3000000  14.8 it/s  vram 3.1 GB  eta 10 min
-00:54:19 INFO      step  21600/30000  loss 0.0578  psnr 27.00  depth 0.0656  gaussians 3000000  14.8 it/s  vram 3.1 GB  eta 9 min
-00:54:26 INFO      step  21700/30000  loss 0.0476  psnr 27.22  depth 0.0529  gaussians 3000000  14.8 it/s  vram 3.1 GB  eta 9 min
-00:54:33 INFO      step  21800/30000  loss 0.0426  psnr 27.21  depth 0.0695  gaussians 3000000  14.7 it/s  vram 3.1 GB  eta 9 min
-00:54:40 INFO      step  21900/30000  loss 0.0279  psnr 27.70  depth 0.0580  gaussians 3000000  14.9 it/s  vram 3.1 GB  eta 9 min
-00:54:47 INFO      step  22000/30000  loss 0.0281  psnr 27.64  depth 0.0547  gaussians 3000000  14.6 it/s  vram 3.1 GB  eta 9 min
-00:54:53 INFO      step  22100/30000  loss 0.0498  psnr 27.30  depth 0.0571  gaussians 3000000  14.7 it/s  vram 3.1 GB  eta 9 min
-00:55:00 INFO      step  22200/30000  loss 0.0349  psnr 27.09  depth 0.0651  gaussians 3000000  14.8 it/s  vram 3.1 GB  eta 9 min
-00:55:07 INFO      step  22300/30000  loss 0.0604  psnr 27.27  depth 0.0568  gaussians 3000000  14.7 it/s  vram 3.1 GB  eta 9 min
-00:55:14 INFO      step  22400/30000  loss 0.0547  psnr 27.13  depth 0.0687  gaussians 3000000  14.8 it/s  vram 3.1 GB  eta 9 min
-00:55:21 INFO      step  22500/30000  loss 0.0648  psnr 27.29  depth 0.0647  gaussians 3000000  14.6 it/s  vram 3.1 GB  eta 9 min
-00:55:27 INFO      step  22600/30000  loss 0.0584  psnr 27.54  depth 0.0535  gaussians 3000000  14.8 it/s  vram 3.1 GB  eta 8 min
-00:55:34 INFO      step  22700/30000  loss 0.0567  psnr 26.80  depth 0.0644  gaussians 3000000  14.8 it/s  vram 3.1 GB  eta 8 min
-00:55:41 INFO      step  22800/30000  loss 0.0354  psnr 27.58  depth 0.0564  gaussians 3000000  14.7 it/s  vram 3.1 GB  eta 8 min
-00:55:48 INFO      step  22900/30000  loss 0.0598  psnr 27.04  depth 0.0624  gaussians 3000000  14.7 it/s  vram 3.1 GB  eta 8 min
-00:55:54 INFO      step  23000/30000  loss 0.0713  psnr 27.15  depth 0.0658  gaussians 3000000  14.7 it/s  vram 3.1 GB  eta 8 min
-00:56:01 INFO      step  23100/30000  loss 0.0472  psnr 27.00  depth 0.0659  gaussians 3000000  14.6 it/s  vram 3.1 GB  eta 8 min
-00:56:08 INFO      step  23200/30000  loss 0.0325  psnr 27.47  depth 0.0568  gaussians 3000000  14.7 it/s  vram 3.1 GB  eta 8 min
-00:56:15 INFO      step  23300/30000  loss 0.0272  psnr 27.22  depth 0.0596  gaussians 3000000  14.8 it/s  vram 3.1 GB  eta 8 min
-00:56:22 INFO      step  23400/30000  loss 0.0557  psnr 27.27  depth 0.0606  gaussians 3000000  14.7 it/s  vram 3.1 GB  eta 7 min
-00:56:29 INFO      step  23500/30000  loss 0.0254  psnr 27.42  depth 0.0544  gaussians 3000000  14.7 it/s  vram 3.1 GB  eta 7 min
-00:56:35 INFO      step  23600/30000  loss 0.0528  psnr 27.44  depth 0.0610  gaussians 3000000  14.6 it/s  vram 3.1 GB  eta 7 min
-00:56:42 INFO      step  23700/30000  loss 0.0508  psnr 27.29  depth 0.0676  gaussians 3000000  14.5 it/s  vram 3.1 GB  eta 7 min
-00:56:49 INFO      step  23800/30000  loss 0.0506  psnr 27.64  depth 0.0583  gaussians 3000000  14.6 it/s  vram 3.1 GB  eta 7 min
-00:56:56 INFO      step  23900/30000  loss 0.0683  psnr 26.71  depth 0.0746  gaussians 3000000  14.6 it/s  vram 3.1 GB  eta 7 min
-00:57:03 INFO      step  24000/30000  loss 0.0243  psnr 26.88  depth 0.0649  gaussians 3000000  14.7 it/s  vram 3.1 GB  eta 7 min
-00:57:10 INFO      step  24100/30000  loss 0.0577  psnr 26.76  depth 0.0692  gaussians 3000000  14.5 it/s  vram 3.1 GB  eta 7 min
-00:57:16 INFO      step  24200/30000  loss 0.0220  psnr 27.29  depth 0.0613  gaussians 3000000  14.5 it/s  vram 3.1 GB  eta 7 min
-00:57:23 INFO      step  24300/30000  loss 0.0761  psnr 27.64  depth 0.0666  gaussians 3000000  14.5 it/s  vram 3.1 GB  eta 7 min
-00:57:30 INFO      step  24400/30000  loss 0.0457  psnr 27.50  depth 0.0625  gaussians 3000000  14.6 it/s  vram 3.1 GB  eta 6 min
-00:57:37 INFO      step  24500/30000  loss 0.0180  psnr 27.46  depth 0.0635  gaussians 3000000  14.7 it/s  vram 3.1 GB  eta 6 min
-00:57:44 INFO      step  24600/30000  loss 0.0314  psnr 27.15  depth 0.0638  gaussians 3000000  14.6 it/s  vram 3.1 GB  eta 6 min
-00:57:51 INFO      step  24700/30000  loss 0.0251  psnr 27.43  depth 0.0633  gaussians 3000000  14.6 it/s  vram 3.1 GB  eta 6 min
-00:57:58 INFO      step  24800/30000  loss 0.0273  psnr 27.57  depth 0.0629  gaussians 3000000  14.7 it/s  vram 3.1 GB  eta 6 min
-00:58:04 INFO      step  24900/30000  loss 0.0466  psnr 27.65  depth 0.0652  gaussians 3000000  14.5 it/s  vram 3.1 GB  eta 6 min
-00:58:11 INFO      step  25000/30000  loss 0.0352  psnr 27.27  depth 0.0662  gaussians 3000000  14.6 it/s  vram 3.1 GB  eta 6 min
-00:58:14 INFO      EVAL step 25000: held-out PSNR 27.67 over 65 unseen images
-00:58:23 INFO      step  25100/30000  loss 0.0528  psnr 27.33  depth 0.0615  gaussians 3000000  8.2 it/s  vram 3.1 GB  eta 10 min
-00:58:30 INFO      step  25200/30000  loss 0.0682  psnr 27.94  depth 0.0713  gaussians 3000000  14.8 it/s  vram 3.1 GB  eta 5 min
-00:58:37 INFO      step  25300/30000  loss 0.0541  psnr 27.35  depth 0.0640  gaussians 3000000  14.9 it/s  vram 3.1 GB  eta 5 min
-00:58:44 INFO      step  25400/30000  loss 0.0367  psnr 27.29  depth 0.0634  gaussians 3000000  14.8 it/s  vram 3.1 GB  eta 5 min
-00:58:50 INFO      step  25500/30000  loss 0.0133  psnr 27.66  depth 0.0646  gaussians 3000000  14.8 it/s  vram 3.1 GB  eta 5 min
-00:58:57 INFO      step  25600/30000  loss 0.0222  psnr 27.88  depth 0.0574  gaussians 3000000  14.8 it/s  vram 3.1 GB  eta 5 min
-00:59:04 INFO      step  25700/30000  loss 0.0365  psnr 27.98  depth 0.0561  gaussians 3000000  14.9 it/s  vram 3.1 GB  eta 5 min
-00:59:11 INFO      step  25800/30000  loss 0.0500  psnr 28.27  depth 0.0630  gaussians 3000000  14.8 it/s  vram 3.1 GB  eta 5 min
-00:59:17 INFO      step  25900/30000  loss 0.0469  psnr 27.60  depth 0.0715  gaussians 3000000  14.9 it/s  vram 3.1 GB  eta 5 min
-00:59:24 INFO      step  26000/30000  loss 0.0471  psnr 27.63  depth 0.0601  gaussians 3000000  15.0 it/s  vram 3.1 GB  eta 4 min
-00:59:31 INFO      step  26100/30000  loss 0.0663  psnr 28.09  depth 0.0684  gaussians 3000000  15.0 it/s  vram 3.1 GB  eta 4 min
-00:59:37 INFO      step  26200/30000  loss 0.0379  psnr 28.08  depth 0.0549  gaussians 3000000  15.0 it/s  vram 3.1 GB  eta 4 min
-00:59:44 INFO      step  26300/30000  loss 0.0599  psnr 28.13  depth 0.0558  gaussians 3000000  15.0 it/s  vram 3.1 GB  eta 4 min
-00:59:51 INFO      step  26400/30000  loss 0.0318  psnr 28.23  depth 0.0662  gaussians 3000000  15.0 it/s  vram 3.1 GB  eta 4 min
-00:59:57 INFO      step  26500/30000  loss 0.0590  psnr 27.72  depth 0.0641  gaussians 3000000  15.0 it/s  vram 3.1 GB  eta 4 min
-01:00:04 INFO      step  26600/30000  loss 0.0228  psnr 28.55  depth 0.0553  gaussians 3000000  15.0 it/s  vram 3.1 GB  eta 4 min
-01:00:11 INFO      step  26700/30000  loss 0.0442  psnr 27.66  depth 0.0675  gaussians 3000000  15.0 it/s  vram 3.1 GB  eta 4 min
-01:00:17 INFO      step  26800/30000  loss 0.0452  psnr 27.68  depth 0.0703  gaussians 3000000  15.0 it/s  vram 3.1 GB  eta 4 min
-01:00:24 INFO      step  26900/30000  loss 0.0183  psnr 28.65  depth 0.0623  gaussians 3000000  14.9 it/s  vram 3.1 GB  eta 3 min
-01:00:31 INFO      step  27000/30000  loss 0.0575  psnr 27.92  depth 0.0687  gaussians 3000000  15.1 it/s  vram 3.1 GB  eta 3 min
-01:00:37 INFO      step  27100/30000  loss 0.0681  psnr 28.34  depth 0.0613  gaussians 3000000  14.9 it/s  vram 3.1 GB  eta 3 min
-01:00:44 INFO      step  27200/30000  loss 0.0560  psnr 27.92  depth 0.0689  gaussians 3000000  15.0 it/s  vram 3.1 GB  eta 3 min
-01:00:51 INFO      step  27300/30000  loss 0.0533  psnr 28.03  depth 0.0651  gaussians 3000000  15.0 it/s  vram 3.1 GB  eta 3 min
-01:00:57 INFO      step  27400/30000  loss 0.0388  psnr 28.25  depth 0.0503  gaussians 3000000  15.2 it/s  vram 3.1 GB  eta 3 min
-01:01:04 INFO      step  27500/30000  loss 0.0620  psnr 28.08  depth 0.0720  gaussians 3000000  15.2 it/s  vram 3.1 GB  eta 3 min
-01:01:11 INFO      step  27600/30000  loss 0.0455  psnr 28.19  depth 0.0599  gaussians 3000000  15.1 it/s  vram 3.1 GB  eta 3 min
-01:01:17 INFO      step  27700/30000  loss 0.0432  psnr 27.78  depth 0.0631  gaussians 3000000  15.1 it/s  vram 3.1 GB  eta 3 min
-01:01:24 INFO      step  27800/30000  loss 0.0567  psnr 28.12  depth 0.0623  gaussians 3000000  15.2 it/s  vram 3.1 GB  eta 2 min
-01:01:30 INFO      step  27900/30000  loss 0.0293  psnr 28.18  depth 0.0613  gaussians 3000000  15.3 it/s  vram 3.1 GB  eta 2 min
-01:01:37 INFO      step  28000/30000  loss 0.0179  psnr 27.70  depth 0.0620  gaussians 3000000  15.2 it/s  vram 3.1 GB  eta 2 min
-01:01:43 INFO      step  28100/30000  loss 0.0575  psnr 28.15  depth 0.0690  gaussians 3000000  15.2 it/s  vram 3.1 GB  eta 2 min
-01:01:50 INFO      step  28200/30000  loss 0.0569  psnr 27.92  depth 0.0717  gaussians 3000000  15.1 it/s  vram 3.1 GB  eta 2 min
-01:01:57 INFO      step  28300/30000  loss 0.0419  psnr 28.36  depth 0.0525  gaussians 3000000  15.2 it/s  vram 3.1 GB  eta 2 min
-01:02:03 INFO      step  28400/30000  loss 0.0433  psnr 28.41  depth 0.0616  gaussians 3000000  15.2 it/s  vram 3.1 GB  eta 2 min
-01:02:10 INFO      step  28500/30000  loss 0.0466  psnr 28.54  depth 0.0595  gaussians 3000000  15.1 it/s  vram 3.1 GB  eta 2 min
-01:02:16 INFO      step  28600/30000  loss 0.0584  psnr 28.44  depth 0.0648  gaussians 3000000  15.3 it/s  vram 3.1 GB  eta 2 min
-01:02:23 INFO      step  28700/30000  loss 0.0184  psnr 28.25  depth 0.0602  gaussians 3000000  15.2 it/s  vram 3.1 GB  eta 1 min
-01:02:30 INFO      step  28800/30000  loss 0.0324  psnr 28.23  depth 0.0635  gaussians 3000000  15.2 it/s  vram 3.1 GB  eta 1 min
-01:02:36 INFO      step  28900/30000  loss 0.0534  psnr 27.77  depth 0.0726  gaussians 3000000  15.1 it/s  vram 3.1 GB  eta 1 min
-01:02:43 INFO      step  29000/30000  loss 0.0589  psnr 28.31  depth 0.0686  gaussians 3000000  15.3 it/s  vram 3.1 GB  eta 1 min
-01:02:49 INFO      step  29100/30000  loss 0.0491  psnr 27.96  depth 0.0670  gaussians 3000000  15.4 it/s  vram 3.1 GB  eta 1 min
-01:02:56 INFO      step  29200/30000  loss 0.0568  psnr 28.25  depth 0.0571  gaussians 3000000  15.2 it/s  vram 3.1 GB  eta 1 min
-01:03:02 INFO      step  29300/30000  loss 0.0310  psnr 28.11  depth 0.0698  gaussians 3000000  15.3 it/s  vram 3.1 GB  eta 1 min
-01:03:09 INFO      step  29400/30000  loss 0.0684  psnr 27.94  depth 0.0714  gaussians 3000000  15.3 it/s  vram 3.1 GB  eta 1 min
-01:03:16 INFO      step  29500/30000  loss 0.0216  psnr 27.57  depth 0.0792  gaussians 3000000  15.1 it/s  vram 3.1 GB  eta 1 min
-01:03:22 INFO      step  29600/30000  loss 0.0504  psnr 28.60  depth 0.0517  gaussians 3000000  15.2 it/s  vram 3.1 GB  eta 0 min
-01:03:29 INFO      step  29700/30000  loss 0.0499  psnr 27.94  depth 0.0710  gaussians 3000000  15.4 it/s  vram 3.1 GB  eta 0 min
-01:03:35 INFO      step  29800/30000  loss 0.0453  psnr 28.35  depth 0.0582  gaussians 3000000  15.4 it/s  vram 3.1 GB  eta 0 min
-01:03:42 INFO      step  29900/30000  loss 0.0291  psnr 28.11  depth 0.0669  gaussians 3000000  15.3 it/s  vram 3.1 GB  eta 0 min
-01:03:48 INFO      step  30000/30000  loss 0.0377  psnr 28.51  depth 0.0674  gaussians 3000000  15.1 it/s  vram 3.1 GB  eta 0 min
-01:03:54 INFO      EVAL step 30000: held-out PSNR 28.28 over 65 unseen images
-01:04:01 INFO      Floater cleanup (full): removing 1854089 of 3000000 Gaussians (low_opacity 1832565, near_camera 0, oversized 30, isolated 21494)
-01:04:03 INFO      EVAL step 30000: held-out PSNR 26.89 over 65 unseen images
-01:04:03 INFO      Floater cleanup (full) undone: held-out PSNR fell 28.28 -> 26.89
-01:04:04 INFO      Floater cleanup (light): removing 1854089 of 3000000 Gaussians (low_opacity 1832565, oversized 30, isolated 21494)
-01:04:06 INFO      EVAL step 30000: held-out PSNR 26.89 over 65 unseen images
-01:04:06 INFO      Floater cleanup (light) undone: held-out PSNR fell 28.28 -> 26.89
-01:04:08 INFO      EVAL step 30000: held-out PSNR 28.28 over 65 unseen images
-01:04:10 INFO      EVAL step 30000: held-out PSNR 27.33 without per-photo corrections
-01:04:10 INFO      Scaffold at the end: 375706 splats lie flat on surfaces; empty-space rule still violated on 1.79% of checked pixels
-01:04:10 INFO      See-through Gaussians (opacity 0.005-0.3): 27.3%
-01:04:13 INFO      Fly-through video: /workspace/work/retrain_patio/patio/train/flythrough.mp4 (640 frames, 21.3 s, made in 3 s)
-01:04:16 INFO      Wrote /workspace/work/retrain_patio/patio/train/splat.ply (3000000 Gaussians)
-01:04:16 INFO      Held-out PSNR 28.28. Side-by-side photo vs splat images: /workspace/work/retrain_patio/patio/train/eval
-01:04:17 INFO    Training finished in 39.4 min
-01:04:17 INFO    [patio] === export ===
-01:04:18 INFO    Splat written to /workspace/work/retrain_patio/_out/patio.ply (492.0 MB)
-01:04:19 INFO    Scene bundle written to /workspace/work/retrain_patio/_out/patio_scene
+13:51:02 INFO    Re-extracting 214 selected frames from patio.mp4
+13:51:02 INFO    $ ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=p=0 /workspace/videos/patio.mp4
+13:51:02 INFO    Video resolution 7680x3840
+13:51:02 INFO    $ ffmpeg -hide_banner -loglevel error -i /workspace/videos/patio.mp4 -vf fps=6 -q:v 2 /workspace/work/retrain_patio/patio/raw/%06d.jpg
+13:51:56 INFO    Extracted 427 frames
+13:52:03 INFO    Wrote 1284 images (214 frames x 6 views, cubemap layout, 1600px, f=800.0)
+13:52:03 INFO    [patio] extract: already done, skipping
+13:52:03 INFO    [patio] select: already done, skipping
+13:52:03 INFO    [patio] slice: already done, skipping
+13:52:03 INFO    [patio] sfm: already done, skipping
+13:52:03 INFO    [patio] gate: already done, skipping
+13:52:03 INFO    [patio] === train ===
+13:52:03 INFO    $ /opt/venv/bin/python /opt/app/train_gsplat.py --data /workspace/work/retrain_patio/patio --out /workspace/work/retrain_patio/patio/train --iterations 30000 --config /workspace/work/retrain_patio/retrain_config.yaml
+13:52:04 INFO      Settings: {"iterations": 30000, "strategy": "mcmc", "cap_max": 3000000, "sh_degree": 2, "sh_degree_interval": 1000, "downscale": 1, "ssim_lambda": 0.2, "opacity_reg": 0.01, "scale_reg": 0.01, "random_background": false, "packed": true, "cache_images": false, "loader_threads": 4, "log_every": 100, "save_every": 5000, "near_plane": 0.01, "seed": 42, "align": true, "up_axis": "+y", "world_scale": 1.0, "exposure": true, "exposure_lr": 0.001, "exposure_reg": 0.01, "bilagrid": false, "bilagrid_xy": 16, "bilagrid_luma": 8, "bilagrid_lr": 0.002, "bilagrid_tv": 10.0, "antialiased": true, "opacity_entropy": 0.002, "opacity_entropy_start": 0.6, "opacity_entropy_end": 0, "pose_opt": false, "pose_lr": 1e-05, "pose_reg": 1e-06, "pose_opt_start": 1000, "scaffold": true, "scaffold_mode": "claude", "scaffold_decision": "", "scaffold_redo": false, "scaffold_model": "claude-opus-5-5", "scaffold_max_cost": 3.0, "scaffold_max_turns": 40, "scaffold_thinking": 0, "scaffold_price_in": 5.0, "scaffold_price_out": 25.0, "scaffold_prompt": "", "scaffold_tol": 0.01, "scaffold_cell": 0.015, "scaffold_candidates": 40, "scaffold_cand_min_frac": 0.002, "scaffold_ransac_iters": 300, "scaffold_max_tilt_deg": 10, "scaffold_check_images": 48, "scaffold_check_step": 8, "scaffold_min_views": 3, "scaffold_min_area": 0.005, "scaffold_min_concentration": 0.5, "scaffold_photo_min": 0.5, "scaffold_res_step": 4, "scaffold_agree": 0.05, "scaffold_conf": 1.0, "scaffold_weight": 0.05, "scaffold_margin": 0.03, "scaffold_soft_margin": 0.15, "scaffold_flat_weight": 0.02, "scaffold_flat_start": 2000, "scaffold_flat_every": 100, "flythrough": true, "flythrough_offset": 0.03, "test_every": 20, "eval_every": 5000, "depth_prior": true, "depth_backend": "auto", "depth_model": "", "depth_process_res": 756, "depth_batch": 8, "depth_mode": "selective", "depth_min_weight": 0.15, "depth_weight": 0.1, "depth_end_ratio": 0.1, "depth_grad_weight": 1.0, "depth_min_points": 30, "depth_max_rel_error": 0.35, "depth_seed": true, "depth_seed_max_points": 300000, "depth_seed_min_weight": 0.5, "depth_seed_stride": 8, "depth_seed_voxel": 0.004, "sky_shell": true, "sky_points": 100000, "sky_radius_mult": 3.0, "prune": true, "prune_min_opacity": 0.005, "prune_max_psnr_drop": 0.05, "prune_near_camera": 0.02, "prune_max_scale": 1.0, "prune_outlier_std": 3.0, "_views": [[0, 0], [90, 0], [180, 0], [270, 0], [0, 90], [0, -90]]}
+13:52:10 INFO      Estimated which points each photo saw (1284 photos, 4 s)
+13:52:10 INFO      Aligned scene upright (+y up, scale x1) from 1284 images; camera 'up' agreement: median 0.0 deg, 95% within 0.1 deg
+13:52:12 INFO      
+13:52:12 INFO      Loading weights:   0%|          | 0/287 [00:00<?, ?it/s]
+13:52:12 INFO      Loading weights: 100%|██████████| 287/287 [00:00<00:00, 9371.98it/s]
+13:52:13 INFO      Depth prior: predicting 1219 images with da2
+13:52:13 INFO      Depth prior: 8/1219
+13:52:26 INFO      Depth prior: 168/1219
+13:52:50 INFO      Depth prior: 328/1219
+13:53:19 INFO      Depth prior: 488/1219
+13:53:41 INFO      Depth prior: 648/1219
+13:53:47 INFO      Depth prior: 808/1219
+13:54:00 INFO      Depth prior: 968/1219
+13:54:15 INFO      Depth prior: 1128/1219
+13:54:24 INFO      Depth prior: 627/1219 training images supervised (592 rejected for poor SfM fit)
+13:54:24 INFO      Dataset: 1284 images (1600x1600) -> 1219 train / 65 held out, 165095 SfM points, scene scale 6.471
+13:54:30 INFO      Scaffold: joined 2 stacked layer(s) of the same surface into 1
+13:54:30 INFO      Scaffold: 40 candidate surface(s) from 165095 SfM points (plane thickness 0.149, outline cell 0.223)
+13:54:35 INFO      Scaffold: checked 40 candidate(s) against 48 photo(s)
+13:54:35 INFO      Scaffold: split 25573 overlapping outline cell(s) between nearly parallel surfaces (each goes to the one the photos agree with)
+13:54:36 INFO      Scaffold: asking Claude (claude-opus-5-5) to review 40 candidate(s)
+13:54:43 INFO      HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+13:54:45 INFO      Scaffold agent: turn 1, show_candidates, ~$0.11 so far
+13:54:54 INFO      HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+13:54:56 INFO      Scaffold agent: turn 2, edit_region, show_photo, show_photo, ~$0.20 so far
+13:55:03 INFO      HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+13:55:05 INFO      Scaffold agent: turn 3, merge, show_candidates, ~$0.24 so far
+13:55:16 INFO      HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+13:55:20 INFO      Scaffold agent: turn 4, edit_region, edit_region, edit_region, edit_region, ~$0.35 so far
+13:55:25 INFO      HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+13:55:27 INFO      Scaffold agent: turn 5, set_rules, review, ~$0.39 so far
+13:55:39 INFO      HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+13:55:40 INFO      Scaffold agent: turn 6, edit_region, show_photo, ~$0.45 so far
+13:55:51 INFO      HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+13:55:56 INFO      Scaffold agent: turn 7, edit_region, edit_region, edit_region, edit_region, edit_region, ~$0.51 so far
+13:56:00 INFO      HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+13:56:00 INFO      Scaffold agent: turn 8, show_candidates, ~$0.55 so far
+13:56:03 INFO      HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+13:56:05 INFO      Scaffold agent: turn 9, review, ~$0.60 so far
+13:56:14 INFO      HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+13:56:14 INFO      Scaffold agent: turn 10, finish, ~$0.65 so far
+13:56:18 INFO      HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+13:56:18 INFO      Scaffold agent: turn 11, show_photo, ~$0.69 so far
+13:56:28 INFO      HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+13:56:34 INFO      HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+13:56:34 INFO      Scaffold agent: turn 13, finish, ~$0.79 so far
+13:56:36 INFO      Scaffold: Claude finished in 13 turn(s), 118 s, ~$0.79
+13:56:36 INFO      Scaffold (claude): 5 solid, 1 window, 32 ignore
+13:58:16 INFO      Depth seeding: 300000 extra starting Gaussians in weakly observed areas (627 images)
+13:58:25 INFO      Sky shell: 100000 Gaussians on a sphere of radius 119.06 (98706 coloured from photos)
+13:58:26 INFO      Initialised 565095 Gaussians: 165095 from SfM points, 300000 depth seeds, 100000 sky shell
+13:58:33 INFO      step    100/30000  loss 0.1225  psnr 20.25  depth 0.8153  gaussians 565095  15.1 it/s  vram 1.2 GB  eta 33 min
+13:58:38 INFO      step    200/30000  loss 0.1512  psnr 19.66  depth 0.7845  gaussians 565095  18.4 it/s  vram 1.2 GB  eta 27 min
+13:58:44 INFO      step    300/30000  loss 0.1106  psnr 19.89  depth 0.7279  gaussians 565095  18.4 it/s  vram 1.2 GB  eta 27 min
+13:58:49 INFO      step    400/30000  loss 0.1202  psnr 20.84  depth 0.6541  gaussians 565095  18.3 it/s  vram 1.2 GB  eta 27 min
+13:58:55 INFO      step    500/30000  loss 0.0919  psnr 20.88  depth 0.5414  gaussians 565095  18.4 it/s  vram 1.2 GB  eta 27 min
+13:59:00 INFO      step    600/30000  loss 0.1459  psnr 21.68  depth 0.4315  gaussians 565095  18.4 it/s  vram 1.2 GB  eta 27 min
+13:59:06 INFO      step    700/30000  loss 0.0805  psnr 22.73  depth 0.3461  gaussians 593349  18.2 it/s  vram 1.3 GB  eta 27 min
+13:59:11 INFO      step    800/30000  loss 0.0605  psnr 24.01  depth 0.2703  gaussians 623016  18.3 it/s  vram 1.3 GB  eta 27 min
+13:59:16 INFO      step    900/30000  loss 0.1371  psnr 24.52  depth 0.1668  gaussians 654166  18.1 it/s  vram 1.3 GB  eta 27 min
+13:59:22 INFO      step   1000/30000  loss 0.0719  psnr 24.41  depth 0.1181  gaussians 686874  18.0 it/s  vram 1.3 GB  eta 27 min
+13:59:28 INFO      step   1100/30000  loss 0.0617  psnr 25.06  depth 0.0820  gaussians 721217  18.1 it/s  vram 1.3 GB  eta 27 min
+13:59:33 INFO      step   1200/30000  loss 0.0672  psnr 25.60  depth 0.0560  gaussians 757277  18.0 it/s  vram 1.4 GB  eta 27 min
+13:59:39 INFO      step   1300/30000  loss 0.0931  psnr 24.21  depth 0.0515  gaussians 795140  17.9 it/s  vram 1.4 GB  eta 27 min
+13:59:44 INFO      step   1400/30000  loss 0.0610  psnr 23.85  depth 0.0597  gaussians 834897  17.7 it/s  vram 1.5 GB  eta 27 min
+13:59:50 INFO      step   1500/30000  loss 0.0794  psnr 23.46  depth 0.0624  gaussians 876641  17.7 it/s  vram 1.5 GB  eta 27 min
+13:59:56 INFO      step   1600/30000  loss 0.0907  psnr 24.43  depth 0.0447  gaussians 920473  17.5 it/s  vram 1.5 GB  eta 27 min
+14:00:01 INFO      step   1700/30000  loss 0.0312  psnr 23.99  depth 0.0472  gaussians 966496  17.6 it/s  vram 1.5 GB  eta 27 min
+14:00:07 INFO      step   1800/30000  loss 0.0454  psnr 24.53  depth 0.0436  gaussians 1014820  17.4 it/s  vram 1.6 GB  eta 27 min
+14:00:13 INFO      step   1900/30000  loss 0.0593  psnr 23.55  depth 0.0562  gaussians 1065561  17.5 it/s  vram 1.6 GB  eta 27 min
+14:00:19 INFO      step   2000/30000  loss 0.0307  psnr 24.51  depth 0.0449  gaussians 1118839  17.1 it/s  vram 1.6 GB  eta 27 min
+14:00:25 INFO      step   2100/30000  loss 0.0757  psnr 23.99  depth 0.0560  gaussians 1174780  16.6 it/s  vram 1.7 GB  eta 28 min
+14:00:31 INFO      step   2200/30000  loss 0.0624  psnr 24.10  depth 0.0436  gaussians 1233519  16.6 it/s  vram 1.7 GB  eta 28 min
+14:00:37 INFO      step   2300/30000  loss 0.0794  psnr 24.24  depth 0.0501  gaussians 1295194  16.4 it/s  vram 1.8 GB  eta 28 min
+14:00:43 INFO      step   2400/30000  loss 0.0835  psnr 24.50  depth 0.0534  gaussians 1359953  15.9 it/s  vram 1.8 GB  eta 29 min
+14:00:49 INFO      step   2500/30000  loss 0.0195  psnr 24.68  depth 0.0477  gaussians 1427950  16.0 it/s  vram 1.8 GB  eta 29 min
+14:00:56 INFO      step   2600/30000  loss 0.0525  psnr 24.33  depth 0.0515  gaussians 1499347  16.0 it/s  vram 1.9 GB  eta 28 min
+14:01:02 INFO      step   2700/30000  loss 0.0843  psnr 24.65  depth 0.0499  gaussians 1574314  16.0 it/s  vram 1.9 GB  eta 29 min
+14:01:08 INFO      step   2800/30000  loss 0.0833  psnr 25.04  depth 0.0433  gaussians 1653029  15.9 it/s  vram 2.0 GB  eta 29 min
+14:01:14 INFO      step   2900/30000  loss 0.0935  psnr 25.81  depth 0.0371  gaussians 1735680  15.8 it/s  vram 2.1 GB  eta 29 min
+14:01:21 INFO      step   3000/30000  loss 0.0858  psnr 25.09  depth 0.0484  gaussians 1822464  15.7 it/s  vram 2.1 GB  eta 29 min
+14:01:27 INFO      step   3100/30000  loss 0.0445  psnr 24.54  depth 0.0512  gaussians 1913587  15.8 it/s  vram 2.2 GB  eta 28 min
+14:01:33 INFO      step   3200/30000  loss 0.0502  psnr 25.72  depth 0.0410  gaussians 2009266  15.9 it/s  vram 2.3 GB  eta 28 min
+14:01:40 INFO      step   3300/30000  loss 0.0793  psnr 25.86  depth 0.0431  gaussians 2109729  15.5 it/s  vram 2.3 GB  eta 29 min
+14:01:46 INFO      step   3400/30000  loss 0.0506  psnr 25.40  depth 0.0490  gaussians 2215215  15.7 it/s  vram 2.3 GB  eta 28 min
+14:01:53 INFO      step   3500/30000  loss 0.0942  psnr 25.89  depth 0.0452  gaussians 2325975  15.3 it/s  vram 2.4 GB  eta 29 min
+14:01:59 INFO      step   3600/30000  loss 0.0292  psnr 25.79  depth 0.0376  gaussians 2442273  15.4 it/s  vram 2.5 GB  eta 29 min
+14:02:06 INFO      step   3700/30000  loss 0.0616  psnr 25.88  depth 0.0403  gaussians 2564386  15.3 it/s  vram 2.7 GB  eta 29 min
+14:02:12 INFO      step   3800/30000  loss 0.0951  psnr 24.60  depth 0.0451  gaussians 2692605  15.2 it/s  vram 2.7 GB  eta 29 min
+14:02:19 INFO      step   3900/30000  loss 0.0804  psnr 25.03  depth 0.0422  gaussians 2827235  14.9 it/s  vram 2.7 GB  eta 29 min
+14:02:26 INFO      step   4000/30000  loss 0.0247  psnr 25.47  depth 0.0439  gaussians 2968596  14.8 it/s  vram 2.9 GB  eta 29 min
+14:02:33 INFO      step   4100/30000  loss 0.0832  psnr 25.31  depth 0.0524  gaussians 3000000  14.7 it/s  vram 3.0 GB  eta 29 min
+14:02:39 INFO      step   4200/30000  loss 0.0529  psnr 25.15  depth 0.0444  gaussians 3000000  14.7 it/s  vram 3.0 GB  eta 29 min
+14:02:46 INFO      step   4300/30000  loss 0.0593  psnr 25.23  depth 0.0418  gaussians 3000000  14.9 it/s  vram 3.0 GB  eta 29 min
+14:02:53 INFO      step   4400/30000  loss 0.0320  psnr 25.42  depth 0.0446  gaussians 3000000  15.0 it/s  vram 3.0 GB  eta 29 min
+14:03:00 INFO      step   4500/30000  loss 0.0753  psnr 26.02  depth 0.0394  gaussians 3000000  15.0 it/s  vram 3.0 GB  eta 28 min
+14:03:06 INFO      step   4600/30000  loss 0.0849  psnr 26.18  depth 0.0432  gaussians 3000000  15.0 it/s  vram 3.0 GB  eta 28 min
+14:03:13 INFO      step   4700/30000  loss 0.0940  psnr 25.72  depth 0.0420  gaussians 3000000  15.0 it/s  vram 3.0 GB  eta 28 min
+14:03:20 INFO      step   4800/30000  loss 0.0436  psnr 25.28  depth 0.0460  gaussians 3000000  15.1 it/s  vram 3.0 GB  eta 28 min
+14:03:26 INFO      step   4900/30000  loss 0.0172  psnr 25.52  depth 0.0460  gaussians 3000000  15.0 it/s  vram 3.0 GB  eta 28 min
+14:03:33 INFO      step   5000/30000  loss 0.0564  psnr 26.13  depth 0.0416  gaussians 3000000  15.3 it/s  vram 3.0 GB  eta 27 min
+14:03:34 INFO      EVAL step 5000: held-out PSNR 26.21 over 65 unseen images
+14:03:42 INFO      step   5100/30000  loss 0.0648  psnr 25.63  depth 0.0445  gaussians 3000000  11.0 it/s  vram 3.0 GB  eta 38 min
+14:03:48 INFO      step   5200/30000  loss 0.0500  psnr 25.67  depth 0.0452  gaussians 3000000  15.2 it/s  vram 3.0 GB  eta 27 min
+14:03:55 INFO      step   5300/30000  loss 0.0568  psnr 26.50  depth 0.0412  gaussians 3000000  15.0 it/s  vram 3.0 GB  eta 27 min
+14:04:02 INFO      step   5400/30000  loss 0.0571  psnr 25.34  depth 0.0553  gaussians 3000000  15.1 it/s  vram 3.0 GB  eta 27 min
+14:04:08 INFO      step   5500/30000  loss 0.0847  psnr 25.73  depth 0.0450  gaussians 3000000  15.2 it/s  vram 3.0 GB  eta 27 min
+14:04:15 INFO      step   5600/30000  loss 0.0527  psnr 26.76  depth 0.0311  gaussians 3000000  15.2 it/s  vram 3.0 GB  eta 27 min
+14:04:21 INFO      step   5700/30000  loss 0.0693  psnr 25.88  depth 0.0437  gaussians 3000000  15.1 it/s  vram 3.0 GB  eta 27 min
+14:04:28 INFO      step   5800/30000  loss 0.0636  psnr 25.99  depth 0.0401  gaussians 3000000  15.2 it/s  vram 3.0 GB  eta 27 min
+14:04:35 INFO      step   5900/30000  loss 0.0506  psnr 25.80  depth 0.0480  gaussians 3000000  15.1 it/s  vram 3.0 GB  eta 27 min
+14:04:41 INFO      step   6000/30000  loss 0.0736  psnr 26.36  depth 0.0391  gaussians 3000000  15.0 it/s  vram 3.0 GB  eta 27 min
+14:04:48 INFO      step   6100/30000  loss 0.0641  psnr 25.99  depth 0.0375  gaussians 3000000  15.0 it/s  vram 3.0 GB  eta 27 min
+14:04:55 INFO      step   6200/30000  loss 0.0410  psnr 26.87  depth 0.0389  gaussians 3000000  15.0 it/s  vram 3.0 GB  eta 26 min
+14:05:01 INFO      step   6300/30000  loss 0.0654  psnr 26.04  depth 0.0429  gaussians 3000000  15.1 it/s  vram 3.0 GB  eta 26 min
+14:05:08 INFO      step   6400/30000  loss 0.0809  psnr 26.22  depth 0.0392  gaussians 3000000  15.1 it/s  vram 3.0 GB  eta 26 min
+14:05:15 INFO      step   6500/30000  loss 0.0410  psnr 26.56  depth 0.0430  gaussians 3000000  15.1 it/s  vram 3.0 GB  eta 26 min
+14:05:21 INFO      step   6600/30000  loss 0.0492  psnr 26.13  depth 0.0434  gaussians 3000000  15.1 it/s  vram 3.0 GB  eta 26 min
+14:05:28 INFO      step   6700/30000  loss 0.0477  psnr 26.31  depth 0.0434  gaussians 3000000  14.9 it/s  vram 3.0 GB  eta 26 min
+14:05:35 INFO      step   6800/30000  loss 0.0457  psnr 25.98  depth 0.0406  gaussians 3000000  15.1 it/s  vram 3.0 GB  eta 26 min
+14:05:41 INFO      step   6900/30000  loss 0.0866  psnr 26.01  depth 0.0522  gaussians 3000000  14.9 it/s  vram 3.0 GB  eta 26 min
+14:05:48 INFO      step   7000/30000  loss 0.0399  psnr 25.77  depth 0.0437  gaussians 3000000  15.1 it/s  vram 3.0 GB  eta 25 min
+14:05:55 INFO      step   7100/30000  loss 0.0527  psnr 26.52  depth 0.0392  gaussians 3000000  15.0 it/s  vram 3.0 GB  eta 25 min
+14:06:01 INFO      step   7200/30000  loss 0.0583  psnr 26.74  depth 0.0340  gaussians 3000000  15.2 it/s  vram 3.0 GB  eta 25 min
+14:06:08 INFO      step   7300/30000  loss 0.1177  psnr 25.83  depth 0.0493  gaussians 3000000  15.0 it/s  vram 3.0 GB  eta 25 min
+14:06:14 INFO      step   7400/30000  loss 0.0814  psnr 26.11  depth 0.0458  gaussians 3000000  15.1 it/s  vram 3.0 GB  eta 25 min
+14:06:21 INFO      step   7500/30000  loss 0.0660  psnr 26.24  depth 0.0383  gaussians 3000000  15.3 it/s  vram 3.0 GB  eta 25 min
+14:06:28 INFO      step   7600/30000  loss 0.0682  psnr 26.68  depth 0.0412  gaussians 3000000  15.1 it/s  vram 3.0 GB  eta 25 min
+14:06:34 INFO      step   7700/30000  loss 0.0511  psnr 26.26  depth 0.0445  gaussians 3000000  15.0 it/s  vram 3.0 GB  eta 25 min
+14:06:41 INFO      step   7800/30000  loss 0.0605  psnr 25.87  depth 0.0485  gaussians 3000000  15.0 it/s  vram 3.0 GB  eta 25 min
+14:06:48 INFO      step   7900/30000  loss 0.0548  psnr 26.80  depth 0.0413  gaussians 3000000  15.0 it/s  vram 3.0 GB  eta 25 min
+14:06:54 INFO      step   8000/30000  loss 0.0793  psnr 26.85  depth 0.0436  gaussians 3000000  14.9 it/s  vram 3.0 GB  eta 25 min
+14:07:01 INFO      step   8100/30000  loss 0.0471  psnr 26.82  depth 0.0379  gaussians 3000000  15.1 it/s  vram 3.0 GB  eta 24 min
+14:07:08 INFO      step   8200/30000  loss 0.0976  psnr 26.52  depth 0.0491  gaussians 3000000  15.0 it/s  vram 3.0 GB  eta 24 min
+14:07:14 INFO      step   8300/30000  loss 0.0670  psnr 26.66  depth 0.0427  gaussians 3000000  15.0 it/s  vram 3.0 GB  eta 24 min
+14:07:21 INFO      step   8400/30000  loss 0.0702  psnr 26.59  depth 0.0366  gaussians 3000000  15.1 it/s  vram 3.0 GB  eta 24 min
+14:07:28 INFO      step   8500/30000  loss 0.0519  psnr 26.79  depth 0.0371  gaussians 3000000  15.0 it/s  vram 3.0 GB  eta 24 min
+14:07:34 INFO      step   8600/30000  loss 0.0467  psnr 26.71  depth 0.0404  gaussians 3000000  15.0 it/s  vram 3.0 GB  eta 24 min
+14:07:41 INFO      step   8700/30000  loss 0.0631  psnr 26.49  depth 0.0447  gaussians 3000000  15.1 it/s  vram 3.0 GB  eta 24 min
+14:07:47 INFO      step   8800/30000  loss 0.0211  psnr 26.92  depth 0.0457  gaussians 3000000  15.1 it/s  vram 3.0 GB  eta 23 min
+14:07:54 INFO      step   8900/30000  loss 0.0432  psnr 25.89  depth 0.0474  gaussians 3000000  15.1 it/s  vram 3.0 GB  eta 23 min
+14:08:01 INFO      step   9000/30000  loss 0.0758  psnr 26.47  depth 0.0408  gaussians 3000000  15.2 it/s  vram 3.0 GB  eta 23 min
+14:08:07 INFO      step   9100/30000  loss 0.0617  psnr 26.23  depth 0.0390  gaussians 3000000  15.1 it/s  vram 3.0 GB  eta 23 min
+14:08:14 INFO      step   9200/30000  loss 0.0757  psnr 26.70  depth 0.0424  gaussians 3000000  15.2 it/s  vram 3.0 GB  eta 23 min
+14:08:20 INFO      step   9300/30000  loss 0.0607  psnr 26.82  depth 0.0469  gaussians 3000000  15.1 it/s  vram 3.0 GB  eta 23 min
+14:08:27 INFO      step   9400/30000  loss 0.0441  psnr 26.74  depth 0.0359  gaussians 3000000  15.1 it/s  vram 3.0 GB  eta 23 min
+14:08:34 INFO      step   9500/30000  loss 0.0814  psnr 26.56  depth 0.0424  gaussians 3000000  15.1 it/s  vram 3.0 GB  eta 23 min
+14:08:40 INFO      step   9600/30000  loss 0.0504  psnr 26.30  depth 0.0397  gaussians 3000000  15.1 it/s  vram 3.0 GB  eta 23 min
+14:08:47 INFO      step   9700/30000  loss 0.0361  psnr 26.72  depth 0.0400  gaussians 3000000  15.1 it/s  vram 3.0 GB  eta 22 min
+14:08:54 INFO      step   9800/30000  loss 0.0530  psnr 27.26  depth 0.0361  gaussians 3000000  15.1 it/s  vram 3.0 GB  eta 22 min
+14:09:00 INFO      step   9900/30000  loss 0.0477  psnr 26.92  depth 0.0465  gaussians 3000000  15.1 it/s  vram 3.0 GB  eta 22 min
+14:09:07 INFO      step  10000/30000  loss 0.0193  psnr 26.49  depth 0.0434  gaussians 3000000  15.2 it/s  vram 3.0 GB  eta 22 min
+14:09:08 INFO      EVAL step 10000: held-out PSNR 26.88 over 65 unseen images
+14:09:16 INFO      step  10100/30000  loss 0.0580  psnr 26.84  depth 0.0413  gaussians 3000000  10.8 it/s  vram 3.0 GB  eta 31 min
+14:09:23 INFO      step  10200/30000  loss 0.0860  psnr 27.01  depth 0.0390  gaussians 3000000  15.0 it/s  vram 3.0 GB  eta 22 min
+14:09:29 INFO      step  10300/30000  loss 0.0816  psnr 27.07  depth 0.0376  gaussians 3000000  15.0 it/s  vram 3.0 GB  eta 22 min
+14:09:36 INFO      step  10400/30000  loss 0.0486  psnr 26.61  depth 0.0515  gaussians 3000000  15.0 it/s  vram 3.0 GB  eta 22 min
+14:09:43 INFO      step  10500/30000  loss 0.0813  psnr 27.11  depth 0.0398  gaussians 3000000  15.0 it/s  vram 3.0 GB  eta 22 min
+14:09:49 INFO      step  10600/30000  loss 0.0728  psnr 26.36  depth 0.0481  gaussians 3000000  15.0 it/s  vram 3.0 GB  eta 22 min
+14:09:56 INFO      step  10700/30000  loss 0.0291  psnr 26.85  depth 0.0428  gaussians 3000000  15.0 it/s  vram 3.0 GB  eta 21 min
+14:10:03 INFO      step  10800/30000  loss 0.0189  psnr 27.51  depth 0.0413  gaussians 3000000  15.1 it/s  vram 3.0 GB  eta 21 min
+14:10:09 INFO      step  10900/30000  loss 0.0676  psnr 26.65  depth 0.0395  gaussians 3000000  15.1 it/s  vram 3.0 GB  eta 21 min
+14:10:16 INFO      step  11000/30000  loss 0.0611  psnr 26.78  depth 0.0428  gaussians 3000000  15.1 it/s  vram 3.0 GB  eta 21 min
+14:10:22 INFO      step  11100/30000  loss 0.0678  psnr 27.08  depth 0.0424  gaussians 3000000  15.2 it/s  vram 3.0 GB  eta 21 min
+14:10:29 INFO      step  11200/30000  loss 0.0403  psnr 27.05  depth 0.0387  gaussians 3000000  15.0 it/s  vram 3.0 GB  eta 21 min
+14:10:36 INFO      step  11300/30000  loss 0.0555  psnr 26.90  depth 0.0461  gaussians 3000000  15.0 it/s  vram 3.0 GB  eta 21 min
+14:10:42 INFO      step  11400/30000  loss 0.0175  psnr 27.07  depth 0.0409  gaussians 3000000  15.0 it/s  vram 3.0 GB  eta 21 min
+14:10:49 INFO      step  11500/30000  loss 0.0496  psnr 26.55  depth 0.0483  gaussians 3000000  15.0 it/s  vram 3.0 GB  eta 21 min
+14:10:56 INFO      step  11600/30000  loss 0.0713  psnr 27.20  depth 0.0426  gaussians 3000000  15.0 it/s  vram 3.0 GB  eta 20 min
+14:11:02 INFO      step  11700/30000  loss 0.0467  psnr 27.04  depth 0.0432  gaussians 3000000  14.9 it/s  vram 3.0 GB  eta 21 min
+14:11:09 INFO      step  11800/30000  loss 0.0569  psnr 26.99  depth 0.0392  gaussians 3000000  15.0 it/s  vram 3.0 GB  eta 20 min
+14:11:16 INFO      step  11900/30000  loss 0.0774  psnr 26.94  depth 0.0469  gaussians 3000000  15.0 it/s  vram 3.0 GB  eta 20 min
+14:11:22 INFO      step  12000/30000  loss 0.0348  psnr 26.87  depth 0.0437  gaussians 3000000  14.9 it/s  vram 3.0 GB  eta 20 min
+14:11:29 INFO      step  12100/30000  loss 0.0730  psnr 26.58  depth 0.0469  gaussians 3000000  15.0 it/s  vram 3.0 GB  eta 20 min
+14:11:36 INFO      step  12200/30000  loss 0.0189  psnr 27.03  depth 0.0393  gaussians 3000000  14.9 it/s  vram 3.0 GB  eta 20 min
+14:11:42 INFO      step  12300/30000  loss 0.0202  psnr 27.03  depth 0.0340  gaussians 3000000  15.0 it/s  vram 3.0 GB  eta 20 min
+14:11:49 INFO      step  12400/30000  loss 0.0639  psnr 26.24  depth 0.0536  gaussians 3000000  15.0 it/s  vram 3.0 GB  eta 20 min
+14:11:56 INFO      step  12500/30000  loss 0.0363  psnr 27.03  depth 0.0437  gaussians 3000000  15.0 it/s  vram 3.0 GB  eta 19 min
+14:12:02 INFO      step  12600/30000  loss 0.0517  psnr 26.83  depth 0.0488  gaussians 3000000  15.0 it/s  vram 3.0 GB  eta 19 min
+14:12:09 INFO      step  12700/30000  loss 0.0840  psnr 27.60  depth 0.0358  gaussians 3000000  15.1 it/s  vram 3.0 GB  eta 19 min
+14:12:16 INFO      step  12800/30000  loss 0.0130  psnr 27.30  depth 0.0433  gaussians 3000000  15.0 it/s  vram 3.0 GB  eta 19 min
+14:12:22 INFO      step  12900/30000  loss 0.0408  psnr 26.71  depth 0.0445  gaussians 3000000  15.0 it/s  vram 3.0 GB  eta 19 min
+14:12:29 INFO      step  13000/30000  loss 0.0629  psnr 26.95  depth 0.0433  gaussians 3000000  14.8 it/s  vram 3.0 GB  eta 19 min
+14:12:36 INFO      step  13100/30000  loss 0.0457  psnr 26.87  depth 0.0459  gaussians 3000000  15.0 it/s  vram 3.0 GB  eta 19 min
+14:12:43 INFO      step  13200/30000  loss 0.0669  psnr 26.91  depth 0.0455  gaussians 3000000  14.9 it/s  vram 3.0 GB  eta 19 min
+14:12:49 INFO      step  13300/30000  loss 0.0651  psnr 27.08  depth 0.0435  gaussians 3000000  15.0 it/s  vram 3.0 GB  eta 19 min
+14:12:56 INFO      step  13400/30000  loss 0.1187  psnr 27.79  depth 0.0403  gaussians 3000000  15.0 it/s  vram 3.0 GB  eta 18 min
+14:13:03 INFO      step  13500/30000  loss 0.0629  psnr 27.28  depth 0.0433  gaussians 3000000  15.1 it/s  vram 3.0 GB  eta 18 min
+14:13:09 INFO      step  13600/30000  loss 0.0637  psnr 26.98  depth 0.0432  gaussians 3000000  15.1 it/s  vram 3.0 GB  eta 18 min
+14:13:16 INFO      step  13700/30000  loss 0.0614  psnr 26.85  depth 0.0405  gaussians 3000000  15.0 it/s  vram 3.0 GB  eta 18 min
+14:13:22 INFO      step  13800/30000  loss 0.0584  psnr 27.50  depth 0.0429  gaussians 3000000  14.9 it/s  vram 3.0 GB  eta 18 min
+14:13:29 INFO      step  13900/30000  loss 0.0377  psnr 27.22  depth 0.0462  gaussians 3000000  14.9 it/s  vram 3.0 GB  eta 18 min
+14:13:36 INFO      step  14000/30000  loss 0.0504  psnr 26.93  depth 0.0484  gaussians 3000000  15.0 it/s  vram 3.0 GB  eta 18 min
+14:13:43 INFO      step  14100/30000  loss 0.0242  psnr 26.89  depth 0.0461  gaussians 3000000  15.0 it/s  vram 3.0 GB  eta 18 min
+14:13:49 INFO      step  14200/30000  loss 0.0394  psnr 26.78  depth 0.0437  gaussians 3000000  15.1 it/s  vram 3.0 GB  eta 17 min
+14:13:56 INFO      step  14300/30000  loss 0.0417  psnr 27.41  depth 0.0336  gaussians 3000000  15.1 it/s  vram 3.0 GB  eta 17 min
+14:14:03 INFO      step  14400/30000  loss 0.0682  psnr 27.48  depth 0.0418  gaussians 3000000  14.9 it/s  vram 3.0 GB  eta 18 min
+14:14:09 INFO      step  14500/30000  loss 0.0563  psnr 27.44  depth 0.0435  gaussians 3000000  15.0 it/s  vram 3.0 GB  eta 17 min
+14:14:16 INFO      step  14600/30000  loss 0.0223  psnr 27.24  depth 0.0458  gaussians 3000000  15.1 it/s  vram 3.0 GB  eta 17 min
+14:14:23 INFO      step  14700/30000  loss 0.0658  psnr 27.17  depth 0.0487  gaussians 3000000  15.0 it/s  vram 3.0 GB  eta 17 min
+14:14:29 INFO      step  14800/30000  loss 0.0214  psnr 27.22  depth 0.0417  gaussians 3000000  14.9 it/s  vram 3.0 GB  eta 17 min
+14:14:36 INFO      step  14900/30000  loss 0.0608  psnr 27.25  depth 0.0377  gaussians 3000000  15.0 it/s  vram 3.0 GB  eta 17 min
+14:14:43 INFO      step  15000/30000  loss 0.0419  psnr 27.89  depth 0.0422  gaussians 3000000  14.9 it/s  vram 3.0 GB  eta 17 min
+14:14:44 INFO      EVAL step 15000: held-out PSNR 27.46 over 65 unseen images
+14:14:52 INFO      step  15100/30000  loss 0.0296  psnr 27.25  depth 0.0424  gaussians 3000000  10.7 it/s  vram 3.0 GB  eta 23 min
+14:14:59 INFO      step  15200/30000  loss 0.0523  psnr 27.26  depth 0.0425  gaussians 3000000  15.1 it/s  vram 3.0 GB  eta 16 min
+14:15:05 INFO      step  15300/30000  loss 0.0344  psnr 27.29  depth 0.0442  gaussians 3000000  14.9 it/s  vram 3.0 GB  eta 16 min
+14:15:12 INFO      step  15400/30000  loss 0.0353  psnr 27.45  depth 0.0456  gaussians 3000000  14.7 it/s  vram 3.0 GB  eta 17 min
+14:15:19 INFO      step  15500/30000  loss 0.0591  psnr 27.08  depth 0.0418  gaussians 3000000  14.8 it/s  vram 3.0 GB  eta 16 min
+14:15:26 INFO      step  15600/30000  loss 0.0255  psnr 26.73  depth 0.0442  gaussians 3000000  14.9 it/s  vram 3.0 GB  eta 16 min
+14:15:32 INFO      step  15700/30000  loss 0.0579  psnr 27.33  depth 0.0499  gaussians 3000000  14.9 it/s  vram 3.0 GB  eta 16 min
+14:15:39 INFO      step  15800/30000  loss 0.0466  psnr 27.45  depth 0.0477  gaussians 3000000  14.9 it/s  vram 3.0 GB  eta 16 min
+14:15:46 INFO      step  15900/30000  loss 0.0484  psnr 27.23  depth 0.0443  gaussians 3000000  14.9 it/s  vram 3.0 GB  eta 16 min
+14:15:52 INFO      step  16000/30000  loss 0.0625  psnr 26.86  depth 0.0499  gaussians 3000000  15.0 it/s  vram 3.0 GB  eta 16 min
+14:15:59 INFO      step  16100/30000  loss 0.0522  psnr 27.39  depth 0.0371  gaussians 3000000  15.0 it/s  vram 3.0 GB  eta 15 min
+14:16:06 INFO      step  16200/30000  loss 0.0509  psnr 27.02  depth 0.0510  gaussians 3000000  14.9 it/s  vram 3.0 GB  eta 15 min
+14:16:13 INFO      step  16300/30000  loss 0.0819  psnr 27.11  depth 0.0511  gaussians 3000000  14.8 it/s  vram 3.0 GB  eta 15 min
+14:16:19 INFO      step  16400/30000  loss 0.0358  psnr 27.21  depth 0.0392  gaussians 3000000  15.0 it/s  vram 3.0 GB  eta 15 min
+14:16:26 INFO      step  16500/30000  loss 0.0244  psnr 28.00  depth 0.0434  gaussians 3000000  14.7 it/s  vram 3.0 GB  eta 15 min
+14:16:33 INFO      step  16600/30000  loss 0.0527  psnr 27.23  depth 0.0466  gaussians 3000000  14.9 it/s  vram 3.0 GB  eta 15 min
+14:16:39 INFO      step  16700/30000  loss 0.0614  psnr 27.48  depth 0.0470  gaussians 3000000  14.9 it/s  vram 3.0 GB  eta 15 min
+14:16:46 INFO      step  16800/30000  loss 0.0436  psnr 27.48  depth 0.0442  gaussians 3000000  14.9 it/s  vram 3.0 GB  eta 15 min
+14:16:53 INFO      step  16900/30000  loss 0.0331  psnr 27.50  depth 0.0396  gaussians 3000000  15.0 it/s  vram 3.0 GB  eta 15 min
+14:17:00 INFO      step  17000/30000  loss 0.0179  psnr 27.38  depth 0.0378  gaussians 3000000  14.9 it/s  vram 3.0 GB  eta 15 min
+14:17:06 INFO      step  17100/30000  loss 0.0271  psnr 26.77  depth 0.0530  gaussians 3000000  14.9 it/s  vram 3.0 GB  eta 14 min
+14:17:13 INFO      step  17200/30000  loss 0.0533  psnr 27.49  depth 0.0499  gaussians 3000000  14.9 it/s  vram 3.0 GB  eta 14 min
+14:17:20 INFO      step  17300/30000  loss 0.0524  psnr 27.59  depth 0.0374  gaussians 3000000  15.1 it/s  vram 3.0 GB  eta 14 min
+14:17:26 INFO      step  17400/30000  loss 0.0365  psnr 27.21  depth 0.0465  gaussians 3000000  15.0 it/s  vram 3.0 GB  eta 14 min
+14:17:33 INFO      step  17500/30000  loss 0.0649  psnr 27.26  depth 0.0539  gaussians 3000000  14.9 it/s  vram 3.0 GB  eta 14 min
+14:17:40 INFO      step  17600/30000  loss 0.0562  psnr 27.18  depth 0.0421  gaussians 3000000  14.8 it/s  vram 3.0 GB  eta 14 min
+14:17:47 INFO      step  17700/30000  loss 0.0489  psnr 27.33  depth 0.0445  gaussians 3000000  14.6 it/s  vram 3.0 GB  eta 14 min
+14:17:53 INFO      step  17800/30000  loss 0.0559  psnr 26.95  depth 0.0469  gaussians 3000000  14.7 it/s  vram 3.0 GB  eta 14 min
+14:18:00 INFO      step  17900/30000  loss 0.0593  psnr 27.26  depth 0.0477  gaussians 3000000  14.8 it/s  vram 3.0 GB  eta 14 min
+14:18:07 INFO      step  18000/30000  loss 0.0596  psnr 28.01  depth 0.0371  gaussians 3000000  14.8 it/s  vram 3.0 GB  eta 14 min
+14:18:14 INFO      step  18100/30000  loss 0.0552  psnr 27.23  depth 0.0472  gaussians 3000000  14.9 it/s  vram 3.0 GB  eta 13 min
+14:18:20 INFO      step  18200/30000  loss 0.0312  psnr 27.28  depth 0.0464  gaussians 3000000  14.9 it/s  vram 3.0 GB  eta 13 min
+14:18:27 INFO      step  18300/30000  loss 0.0490  psnr 27.70  depth 0.0446  gaussians 3000000  14.9 it/s  vram 3.0 GB  eta 13 min
+14:18:34 INFO      step  18400/30000  loss 0.0581  psnr 27.54  depth 0.0498  gaussians 3000000  14.9 it/s  vram 3.0 GB  eta 13 min
+14:18:40 INFO      step  18500/30000  loss 0.0289  psnr 27.62  depth 0.0464  gaussians 3000000  14.9 it/s  vram 3.0 GB  eta 13 min
+14:18:47 INFO      step  18600/30000  loss 0.0374  psnr 27.31  depth 0.0471  gaussians 3000000  14.9 it/s  vram 3.0 GB  eta 13 min
+14:18:54 INFO      step  18700/30000  loss 0.0657  psnr 26.82  depth 0.0471  gaussians 3000000  15.0 it/s  vram 3.0 GB  eta 13 min
+14:19:01 INFO      step  18800/30000  loss 0.0188  psnr 27.54  depth 0.0462  gaussians 3000000  14.9 it/s  vram 3.0 GB  eta 13 min
+14:19:07 INFO      step  18900/30000  loss 0.0443  psnr 27.28  depth 0.0469  gaussians 3000000  14.9 it/s  vram 3.0 GB  eta 12 min
+14:19:14 INFO      step  19000/30000  loss 0.0322  psnr 27.43  depth 0.0401  gaussians 3000000  14.9 it/s  vram 3.0 GB  eta 12 min
+14:19:21 INFO      step  19100/30000  loss 0.0322  psnr 27.04  depth 0.0480  gaussians 3000000  15.0 it/s  vram 3.0 GB  eta 12 min
+14:19:27 INFO      step  19200/30000  loss 0.0420  psnr 27.11  depth 0.0501  gaussians 3000000  15.0 it/s  vram 3.0 GB  eta 12 min
+14:19:34 INFO      step  19300/30000  loss 0.0515  psnr 26.86  depth 0.0474  gaussians 3000000  15.1 it/s  vram 3.0 GB  eta 12 min
+14:19:41 INFO      step  19400/30000  loss 0.0279  psnr 27.21  depth 0.0470  gaussians 3000000  14.9 it/s  vram 3.0 GB  eta 12 min
+14:19:47 INFO      step  19500/30000  loss 0.0529  psnr 27.60  depth 0.0434  gaussians 3000000  15.0 it/s  vram 3.0 GB  eta 12 min
+14:19:54 INFO      step  19600/30000  loss 0.0576  psnr 26.64  depth 0.0520  gaussians 3000000  14.9 it/s  vram 3.0 GB  eta 12 min
+14:20:01 INFO      step  19700/30000  loss 0.0613  psnr 27.07  depth 0.0488  gaussians 3000000  14.8 it/s  vram 3.0 GB  eta 12 min
+14:20:07 INFO      step  19800/30000  loss 0.0648  psnr 27.57  depth 0.0475  gaussians 3000000  15.0 it/s  vram 3.0 GB  eta 11 min
+14:20:14 INFO      step  19900/30000  loss 0.0458  psnr 26.85  depth 0.0557  gaussians 3000000  15.0 it/s  vram 3.0 GB  eta 11 min
+14:20:21 INFO      step  20000/30000  loss 0.0229  psnr 27.70  depth 0.0424  gaussians 3000000  14.9 it/s  vram 3.0 GB  eta 11 min
+14:20:22 INFO      EVAL step 20000: held-out PSNR 27.32 over 65 unseen images
+14:20:30 INFO      step  20100/30000  loss 0.0601  psnr 27.56  depth 0.0422  gaussians 3000000  10.7 it/s  vram 3.0 GB  eta 15 min
+14:20:37 INFO      step  20200/30000  loss 0.0644  psnr 27.16  depth 0.0498  gaussians 3000000  14.7 it/s  vram 3.0 GB  eta 11 min
+14:20:44 INFO      step  20300/30000  loss 0.0459  psnr 27.40  depth 0.0442  gaussians 3000000  14.7 it/s  vram 3.0 GB  eta 11 min
+14:20:51 INFO      step  20400/30000  loss 0.0412  psnr 27.45  depth 0.0511  gaussians 3000000  14.7 it/s  vram 3.0 GB  eta 11 min
+14:20:57 INFO      step  20500/30000  loss 0.0235  psnr 27.86  depth 0.0446  gaussians 3000000  14.7 it/s  vram 3.0 GB  eta 11 min
+14:21:04 INFO      step  20600/30000  loss 0.0335  psnr 27.26  depth 0.0488  gaussians 3000000  14.8 it/s  vram 3.0 GB  eta 11 min
+14:21:11 INFO      step  20700/30000  loss 0.0587  psnr 27.70  depth 0.0395  gaussians 3000000  14.8 it/s  vram 3.0 GB  eta 10 min
+14:21:18 INFO      step  20800/30000  loss 0.0567  psnr 27.53  depth 0.0466  gaussians 3000000  14.8 it/s  vram 3.0 GB  eta 10 min
+14:21:24 INFO      step  20900/30000  loss 0.0620  psnr 27.79  depth 0.0327  gaussians 3000000  14.9 it/s  vram 3.0 GB  eta 10 min
+14:21:31 INFO      step  21000/30000  loss 0.0588  psnr 27.63  depth 0.0454  gaussians 3000000  14.7 it/s  vram 3.0 GB  eta 10 min
+14:21:38 INFO      step  21100/30000  loss 0.0351  psnr 27.13  depth 0.0600  gaussians 3000000  14.7 it/s  vram 3.0 GB  eta 10 min
+14:21:45 INFO      step  21200/30000  loss 0.0571  psnr 27.21  depth 0.0548  gaussians 3000000  14.8 it/s  vram 3.0 GB  eta 10 min
+14:21:51 INFO      step  21300/30000  loss 0.0594  psnr 26.76  depth 0.0606  gaussians 3000000  14.9 it/s  vram 3.0 GB  eta 10 min
+14:21:58 INFO      step  21400/30000  loss 0.0499  psnr 27.29  depth 0.0428  gaussians 3000000  14.8 it/s  vram 3.0 GB  eta 10 min
+14:22:05 INFO      step  21500/30000  loss 0.0528  psnr 27.13  depth 0.0467  gaussians 3000000  14.8 it/s  vram 3.0 GB  eta 10 min
+14:22:12 INFO      step  21600/30000  loss 0.0505  psnr 27.05  depth 0.0529  gaussians 3000000  14.7 it/s  vram 3.0 GB  eta 10 min
+14:22:19 INFO      step  21700/30000  loss 0.0527  psnr 27.32  depth 0.0440  gaussians 3000000  14.7 it/s  vram 3.0 GB  eta 9 min
+14:22:25 INFO      step  21800/30000  loss 0.0461  psnr 27.19  depth 0.0549  gaussians 3000000  14.7 it/s  vram 3.0 GB  eta 9 min
+14:22:32 INFO      step  21900/30000  loss 0.0268  psnr 27.98  depth 0.0446  gaussians 3000000  14.7 it/s  vram 3.0 GB  eta 9 min
+14:22:39 INFO      step  22000/30000  loss 0.0220  psnr 27.70  depth 0.0480  gaussians 3000000  14.7 it/s  vram 3.0 GB  eta 9 min
+14:22:46 INFO      step  22100/30000  loss 0.0441  psnr 27.37  depth 0.0462  gaussians 3000000  14.6 it/s  vram 3.0 GB  eta 9 min
+14:22:53 INFO      step  22200/30000  loss 0.0405  psnr 27.21  depth 0.0542  gaussians 3000000  14.6 it/s  vram 3.0 GB  eta 9 min
+14:23:00 INFO      step  22300/30000  loss 0.0632  psnr 27.52  depth 0.0442  gaussians 3000000  14.6 it/s  vram 3.0 GB  eta 9 min
+14:23:06 INFO      step  22400/30000  loss 0.0400  psnr 27.26  depth 0.0569  gaussians 3000000  14.6 it/s  vram 3.0 GB  eta 9 min
+14:23:13 INFO      step  22500/30000  loss 0.0666  psnr 27.33  depth 0.0503  gaussians 3000000  14.7 it/s  vram 3.0 GB  eta 9 min
+14:23:20 INFO      step  22600/30000  loss 0.0427  psnr 27.53  depth 0.0430  gaussians 3000000  14.8 it/s  vram 3.0 GB  eta 8 min
+14:23:27 INFO      step  22700/30000  loss 0.0715  psnr 26.85  depth 0.0517  gaussians 3000000  14.7 it/s  vram 3.0 GB  eta 8 min
+14:23:34 INFO      step  22800/30000  loss 0.0367  psnr 27.64  depth 0.0451  gaussians 3000000  14.7 it/s  vram 3.0 GB  eta 8 min
+14:23:40 INFO      step  22900/30000  loss 0.0665  psnr 27.18  depth 0.0524  gaussians 3000000  14.7 it/s  vram 3.0 GB  eta 8 min
+14:23:47 INFO      step  23000/30000  loss 0.0598  psnr 27.25  depth 0.0539  gaussians 3000000  14.7 it/s  vram 3.0 GB  eta 8 min
+14:23:54 INFO      step  23100/30000  loss 0.0481  psnr 27.07  depth 0.0570  gaussians 3000000  14.7 it/s  vram 3.0 GB  eta 8 min
+14:24:01 INFO      step  23200/30000  loss 0.0452  psnr 27.70  depth 0.0415  gaussians 3000000  14.8 it/s  vram 3.0 GB  eta 8 min
+14:24:08 INFO      step  23300/30000  loss 0.0344  psnr 27.22  depth 0.0525  gaussians 3000000  14.7 it/s  vram 3.0 GB  eta 8 min
+14:24:14 INFO      step  23400/30000  loss 0.0481  psnr 27.29  depth 0.0513  gaussians 3000000  14.7 it/s  vram 3.0 GB  eta 7 min
+14:24:21 INFO      step  23500/30000  loss 0.0185  psnr 27.87  depth 0.0435  gaussians 3000000  14.5 it/s  vram 3.0 GB  eta 7 min
+14:24:28 INFO      step  23600/30000  loss 0.0419  psnr 27.50  depth 0.0491  gaussians 3000000  14.8 it/s  vram 3.0 GB  eta 7 min
+14:24:35 INFO      step  23700/30000  loss 0.0505  psnr 27.41  depth 0.0497  gaussians 3000000  14.7 it/s  vram 3.0 GB  eta 7 min
+14:24:42 INFO      step  23800/30000  loss 0.0442  psnr 27.98  depth 0.0455  gaussians 3000000  14.8 it/s  vram 3.0 GB  eta 7 min
+14:24:48 INFO      step  23900/30000  loss 0.0670  psnr 26.80  depth 0.0633  gaussians 3000000  14.8 it/s  vram 3.0 GB  eta 7 min
+14:24:55 INFO      step  24000/30000  loss 0.0153  psnr 27.17  depth 0.0475  gaussians 3000000  14.9 it/s  vram 3.0 GB  eta 7 min
+14:25:02 INFO      step  24100/30000  loss 0.0517  psnr 26.89  depth 0.0586  gaussians 3000000  14.8 it/s  vram 3.0 GB  eta 7 min
+14:25:09 INFO      step  24200/30000  loss 0.0437  psnr 27.34  depth 0.0508  gaussians 3000000  14.7 it/s  vram 3.0 GB  eta 7 min
+14:25:16 INFO      step  24300/30000  loss 0.0671  psnr 27.80  depth 0.0492  gaussians 3000000  14.6 it/s  vram 3.0 GB  eta 7 min
+14:25:22 INFO      step  24400/30000  loss 0.0576  psnr 27.49  depth 0.0480  gaussians 3000000  14.6 it/s  vram 3.0 GB  eta 6 min
+14:25:29 INFO      step  24500/30000  loss 0.0254  psnr 27.50  depth 0.0532  gaussians 3000000  14.7 it/s  vram 3.0 GB  eta 6 min
+14:25:36 INFO      step  24600/30000  loss 0.0250  psnr 27.41  depth 0.0543  gaussians 3000000  14.6 it/s  vram 3.0 GB  eta 6 min
+14:25:43 INFO      step  24700/30000  loss 0.0384  psnr 27.34  depth 0.0515  gaussians 3000000  14.5 it/s  vram 3.0 GB  eta 6 min
+14:25:50 INFO      step  24800/30000  loss 0.0305  psnr 27.45  depth 0.0506  gaussians 3000000  14.6 it/s  vram 3.0 GB  eta 6 min
+14:25:57 INFO      step  24900/30000  loss 0.0648  psnr 27.72  depth 0.0560  gaussians 3000000  14.5 it/s  vram 3.0 GB  eta 6 min
+14:26:04 INFO      step  25000/30000  loss 0.0223  psnr 27.44  depth 0.0566  gaussians 3000000  14.6 it/s  vram 3.0 GB  eta 6 min
+14:26:05 INFO      EVAL step 25000: held-out PSNR 27.68 over 65 unseen images
+14:26:13 INFO      step  25100/30000  loss 0.0481  psnr 27.43  depth 0.0512  gaussians 3000000  10.6 it/s  vram 3.0 GB  eta 8 min
+14:26:20 INFO      step  25200/30000  loss 0.0657  psnr 28.04  depth 0.0553  gaussians 3000000  14.7 it/s  vram 3.0 GB  eta 5 min
+14:26:26 INFO      step  25300/30000  loss 0.0651  psnr 27.56  depth 0.0457  gaussians 3000000  14.9 it/s  vram 3.0 GB  eta 5 min
+14:26:33 INFO      step  25400/30000  loss 0.0476  psnr 27.27  depth 0.0478  gaussians 3000000  14.9 it/s  vram 3.0 GB  eta 5 min
+14:26:40 INFO      step  25500/30000  loss 0.0195  psnr 27.73  depth 0.0557  gaussians 3000000  14.9 it/s  vram 3.0 GB  eta 5 min
+14:26:47 INFO      step  25600/30000  loss 0.0230  psnr 28.01  depth 0.0474  gaussians 3000000  15.0 it/s  vram 3.0 GB  eta 5 min
+14:26:53 INFO      step  25700/30000  loss 0.0522  psnr 28.16  depth 0.0433  gaussians 3000000  15.0 it/s  vram 3.0 GB  eta 5 min
+14:27:00 INFO      step  25800/30000  loss 0.0464  psnr 28.25  depth 0.0489  gaussians 3000000  14.9 it/s  vram 3.0 GB  eta 5 min
+14:27:07 INFO      step  25900/30000  loss 0.0537  psnr 27.67  depth 0.0587  gaussians 3000000  14.9 it/s  vram 3.0 GB  eta 5 min
+14:27:13 INFO      step  26000/30000  loss 0.0447  psnr 27.59  depth 0.0458  gaussians 3000000  15.0 it/s  vram 3.0 GB  eta 4 min
+14:27:20 INFO      step  26100/30000  loss 0.0673  psnr 28.13  depth 0.0550  gaussians 3000000  15.0 it/s  vram 3.0 GB  eta 4 min
+14:27:27 INFO      step  26200/30000  loss 0.0310  psnr 28.24  depth 0.0474  gaussians 3000000  15.1 it/s  vram 3.0 GB  eta 4 min
+14:27:33 INFO      step  26300/30000  loss 0.0650  psnr 28.16  depth 0.0487  gaussians 3000000  15.1 it/s  vram 3.0 GB  eta 4 min
+14:27:40 INFO      step  26400/30000  loss 0.0235  psnr 28.17  depth 0.0550  gaussians 3000000  15.1 it/s  vram 3.0 GB  eta 4 min
+14:27:46 INFO      step  26500/30000  loss 0.0564  psnr 27.78  depth 0.0495  gaussians 3000000  15.1 it/s  vram 3.0 GB  eta 4 min
+14:27:53 INFO      step  26600/30000  loss 0.0390  psnr 28.33  depth 0.0449  gaussians 3000000  15.1 it/s  vram 3.0 GB  eta 4 min
+14:28:00 INFO      step  26700/30000  loss 0.0533  psnr 27.66  depth 0.0507  gaussians 3000000  15.1 it/s  vram 3.0 GB  eta 4 min
+14:28:06 INFO      step  26800/30000  loss 0.0456  psnr 27.80  depth 0.0595  gaussians 3000000  15.0 it/s  vram 3.0 GB  eta 4 min
+14:28:13 INFO      step  26900/30000  loss 0.0472  psnr 28.48  depth 0.0475  gaussians 3000000  15.0 it/s  vram 3.0 GB  eta 3 min
+14:28:20 INFO      step  27000/30000  loss 0.0490  psnr 28.06  depth 0.0490  gaussians 3000000  15.1 it/s  vram 3.0 GB  eta 3 min
+14:28:26 INFO      step  27100/30000  loss 0.0543  psnr 28.53  depth 0.0496  gaussians 3000000  15.0 it/s  vram 3.0 GB  eta 3 min
+14:28:33 INFO      step  27200/30000  loss 0.0536  psnr 28.20  depth 0.0538  gaussians 3000000  15.1 it/s  vram 3.0 GB  eta 3 min
+14:28:40 INFO      step  27300/30000  loss 0.0732  psnr 28.15  depth 0.0534  gaussians 3000000  15.1 it/s  vram 3.0 GB  eta 3 min
+14:28:46 INFO      step  27400/30000  loss 0.0461  psnr 28.39  depth 0.0422  gaussians 3000000  15.2 it/s  vram 3.0 GB  eta 3 min
+14:28:53 INFO      step  27500/30000  loss 0.0422  psnr 28.16  depth 0.0602  gaussians 3000000  15.1 it/s  vram 3.0 GB  eta 3 min
+14:28:59 INFO      step  27600/30000  loss 0.0541  psnr 28.11  depth 0.0460  gaussians 3000000  15.2 it/s  vram 3.0 GB  eta 3 min
+14:29:06 INFO      step  27700/30000  loss 0.0452  psnr 27.94  depth 0.0534  gaussians 3000000  15.2 it/s  vram 3.0 GB  eta 3 min
+14:29:12 INFO      step  27800/30000  loss 0.0529  psnr 28.12  depth 0.0500  gaussians 3000000  15.2 it/s  vram 3.0 GB  eta 2 min
+14:29:19 INFO      step  27900/30000  loss 0.0276  psnr 28.07  depth 0.0519  gaussians 3000000  15.2 it/s  vram 3.0 GB  eta 2 min
+14:29:26 INFO      step  28000/30000  loss 0.0281  psnr 27.84  depth 0.0505  gaussians 3000000  15.1 it/s  vram 3.0 GB  eta 2 min
+14:29:32 INFO      step  28100/30000  loss 0.0618  psnr 28.17  depth 0.0541  gaussians 3000000  15.3 it/s  vram 3.0 GB  eta 2 min
+14:29:39 INFO      step  28200/30000  loss 0.0414  psnr 27.89  depth 0.0610  gaussians 3000000  15.2 it/s  vram 3.0 GB  eta 2 min
+14:29:45 INFO      step  28300/30000  loss 0.0699  psnr 28.33  depth 0.0435  gaussians 3000000  15.3 it/s  vram 3.0 GB  eta 2 min
+14:29:52 INFO      step  28400/30000  loss 0.0412  psnr 28.54  depth 0.0524  gaussians 3000000  15.2 it/s  vram 3.0 GB  eta 2 min
+14:29:58 INFO      step  28500/30000  loss 0.0503  psnr 28.74  depth 0.0463  gaussians 3000000  15.2 it/s  vram 3.0 GB  eta 2 min
+14:30:05 INFO      step  28600/30000  loss 0.0426  psnr 28.37  depth 0.0492  gaussians 3000000  15.2 it/s  vram 3.0 GB  eta 2 min
+14:30:12 INFO      step  28700/30000  loss 0.0351  psnr 28.10  depth 0.0468  gaussians 3000000  15.3 it/s  vram 3.0 GB  eta 1 min
+14:30:18 INFO      step  28800/30000  loss 0.0546  psnr 28.08  depth 0.0560  gaussians 3000000  15.3 it/s  vram 3.0 GB  eta 1 min
+14:30:25 INFO      step  28900/30000  loss 0.0340  psnr 27.92  depth 0.0587  gaussians 3000000  15.1 it/s  vram 3.0 GB  eta 1 min
+14:30:31 INFO      step  29000/30000  loss 0.0628  psnr 28.32  depth 0.0532  gaussians 3000000  15.3 it/s  vram 3.0 GB  eta 1 min
+14:30:38 INFO      step  29100/30000  loss 0.0463  psnr 27.81  depth 0.0538  gaussians 3000000  15.4 it/s  vram 3.0 GB  eta 1 min
+14:30:44 INFO      step  29200/30000  loss 0.0395  psnr 28.39  depth 0.0436  gaussians 3000000  15.3 it/s  vram 3.0 GB  eta 1 min
+14:30:51 INFO      step  29300/30000  loss 0.0335  psnr 28.16  depth 0.0543  gaussians 3000000  15.3 it/s  vram 3.0 GB  eta 1 min
+14:30:57 INFO      step  29400/30000  loss 0.0565  psnr 27.85  depth 0.0604  gaussians 3000000  15.4 it/s  vram 3.0 GB  eta 1 min
+14:31:04 INFO      step  29500/30000  loss 0.0152  psnr 27.60  depth 0.0692  gaussians 3000000  15.2 it/s  vram 3.0 GB  eta 1 min
+14:31:11 INFO      step  29600/30000  loss 0.0632  psnr 28.77  depth 0.0418  gaussians 3000000  15.2 it/s  vram 3.0 GB  eta 0 min
+14:31:17 INFO      step  29700/30000  loss 0.0510  psnr 28.03  depth 0.0591  gaussians 3000000  15.3 it/s  vram 3.0 GB  eta 0 min
+14:31:24 INFO      step  29800/30000  loss 0.0256  psnr 28.29  depth 0.0460  gaussians 3000000  15.4 it/s  vram 3.0 GB  eta 0 min
+14:31:30 INFO      step  29900/30000  loss 0.0583  psnr 28.16  depth 0.0528  gaussians 3000000  15.3 it/s  vram 3.0 GB  eta 0 min
+14:31:37 INFO      step  30000/30000  loss 0.0432  psnr 28.64  depth 0.0543  gaussians 3000000  15.1 it/s  vram 3.0 GB  eta 0 min
+14:31:39 INFO      EVAL step 30000: held-out PSNR 28.40 over 65 unseen images (trial)
+14:31:47 INFO      Floater cleanup (full): removing 1561896 of 3000000 Gaussians (low_opacity 1532083, near_camera 0, oversized 21, isolated 29792)
+14:31:49 INFO      EVAL step 30000: held-out PSNR 27.39 over 65 unseen images (trial)
+14:31:49 INFO      Floater cleanup (full) undone: held-out PSNR fell 28.40 -> 27.39
+14:31:51 INFO      Floater cleanup (light): removing 60687 of 3000000 Gaussians (low_opacity 0, oversized 21, isolated 60666)
+14:31:53 INFO      EVAL step 30000: held-out PSNR 28.03 over 65 unseen images (trial)
+14:31:53 INFO      Floater cleanup (light) undone: held-out PSNR fell 28.40 -> 28.03
+14:31:54 INFO      EVAL step 30000: held-out PSNR 28.40 over 65 unseen images
+14:31:56 INFO      EVAL step 30000: held-out PSNR 27.28 without per-photo corrections
+14:31:56 INFO      Scaffold at the end: 406222 splats lie flat on surfaces; empty-space rule still violated on 2.25% of checked pixels
+14:31:56 INFO      Opacity of the exported Gaussians: 51.1% near-invisible (<0.005), 37.0% see-through (0.005-0.3), 12.0% solid (>=0.3)
+14:31:59 INFO      Fly-through video: /workspace/work/retrain_patio/patio/train/flythrough.mp4 (640 frames, 21.3 s, made in 3 s)
+14:32:00 INFO      Wrote /workspace/work/retrain_patio/patio/train/splat.ply (3000000 Gaussians)
+14:32:00 INFO      Held-out PSNR 28.40. Side-by-side photo vs splat images: /workspace/work/retrain_patio/patio/train/eval
+14:32:02 INFO    Training finished in 40.0 min
+14:32:02 INFO    [patio] === export ===
+14:32:02 INFO    Splat written to /workspace/work/retrain_patio/_out/patio.ply (492.0 MB)
+14:32:02 INFO    Scene bundle written to /workspace/work/retrain_patio/_out/patio_scene
 RETRAIN_DONE {"status": "ok", "error": null}

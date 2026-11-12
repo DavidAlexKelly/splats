@@ -1,0 +1,11 @@
+{
+  "source": "patio",
+  "video": "patio.mp4",
+  "run_key": "2ca25846b9985e25",
+  "kind": "fixer",
+  "overrides": {},
+  "rerun": false,
+  "status": "ok",
+  "note": "Contains AI-generated content (NVIDIA Fixer, NVIDIA Open Model License).",
+  "finished": "2026-11-12 00:14:49"
+}

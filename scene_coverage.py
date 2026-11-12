@@ -11,6 +11,13 @@ enough photos, close enough and from different enough directions to pin it down)
   - score = min(1, sightings / coverage_good_views) x min(1, angle between the sightings /
     coverage_good_spread). One view, or many views from one direction, can't pin a point.
 
+For a NEW viewpoint that score is the wrong question: from a flight path a few metres across,
+nothing far away is seen from 20 degrees apart, yet a view a little off the path sees a far
+wall from much the same direction as the photos did, so the photos already show it. So each
+Gaussian also records which directions real photos saw it from (63 direction bins), and
+Coverage.for_view(camera) says, per Gaussian, whether a real photo saw it from about the same
+direction as that camera. That is what the Fixer step treats as a gap.
+
 Used by
   train_gsplat.py   coverage_topdown.jpg + coverage.json with every result: a map of the
                     poorly covered areas (red) and the worst few numbered (fly there next time)
@@ -23,6 +30,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 from pathlib import Path
 
 import numpy as np
@@ -83,8 +91,9 @@ class SplatView:
         return torch.where(a > 0.5, d, torch.zeros_like(d))
 
     def coverage_image(self, fr: dict, cov, scale: float = 1.0):
-        """Per-pixel coverage (0..1) seen from a camera: the coverage of whatever the pixel
-        shows, weighted by how opaque it is; empty pixels are 0."""
+        """Per-pixel coverage (0..1) seen from a camera: the per-Gaussian values `cov` (e.g.
+        Coverage.for_view(fr)) of whatever the pixel shows, weighted by how opaque it is;
+        empty pixels are 0."""
         import torch
         cols = cov.float()[:, None].expand(-1, 3).contiguous()
         img, _ = self.raster(fr, colors=cols, scale=scale)
@@ -113,8 +122,44 @@ def _observe(P, fr: dict, D, near: float):
     return seen, z
 
 
+def _sphere_bins(n: int, device):
+    """n roughly evenly spread unit directions (Fibonacci sphere)."""
+    import torch
+    i = torch.arange(n, dtype=torch.float32, device=device) + 0.5
+    phi = torch.acos(1 - 2 * i / n)
+    theta = math.pi * (1 + 5 ** 0.5) * i
+    return torch.stack([torch.cos(theta) * torch.sin(phi), torch.sin(theta) * torch.sin(phi),
+                        torch.cos(phi)], 1)
+
+
+N_BINS = 63  # ~26 degrees apart: a sighting counts for directions within ~15 degrees of it
+
+
+def _bin_of(dirs, bins, chunk: int = 1_000_000):
+    import torch
+    out = torch.empty(len(dirs), dtype=torch.long, device=dirs.device)
+    for k in range(0, len(dirs), chunk):
+        out[k:k + chunk] = (dirs[k:k + chunk] @ bins.T).argmax(1)
+    return out
+
+
+class Coverage:
+    """score: per-Gaussian coverage (0..1, for the map). for_view(cam): per-Gaussian 1/0,
+    seen by a real photo from about the direction of that camera."""
+
+    def __init__(self, score, dirmask, P, bins):
+        self.score, self.dirmask, self.P, self.bins = score, dirmask, P, bins
+
+    def for_view(self, cam: dict):
+        import torch
+        with torch.no_grad():
+            c = torch.as_tensor(np.asarray(cam["center"], np.float32), device=self.P.device)
+            b = _bin_of(torch.nn.functional.normalize(c[None] - self.P, dim=1), self.bins)
+            return ((self.dirmask >> b) & 1).float()
+
+
 def gaussian_coverage(view: SplatView, frames: list[dict], cam_idx: list[int], s: dict):
-    """Coverage score per Gaussian (tensor [N], 0..1) and a small info dict."""
+    """(Coverage, small info dict) for the splat's Gaussians."""
     import torch
     sp = view.splats
     with torch.no_grad():
@@ -138,6 +183,8 @@ def gaussian_coverage(view: SplatView, frames: list[dict], cam_idx: list[int], s
         z_ref = float(torch.cat(zs).median()) if zs else 1.0
         n = torch.zeros(N, device=dev)
         dsum = torch.zeros(N, 3, device=dev)
+        bins = _sphere_bins(N_BINS, dev)
+        dirmask = torch.zeros(N, dtype=torch.long, device=dev)
         for i in cams:
             fr = frames[i]
             seen, z = _observe(P, fr, view.depth(fr, scale), near)
@@ -149,12 +196,15 @@ def gaussian_coverage(view: SplatView, frames: list[dict], cam_idx: list[int], s
             dirs = torch.nn.functional.normalize(c[None] - P, dim=1)
             n += w
             dsum += w[:, None] * dirs
+            bit = torch.bitwise_left_shift(torch.ones_like(dirmask), _bin_of(dirs, bins))
+            dirmask |= torch.where(seen, bit, torch.zeros_like(bit))
         mean_len = (dsum.norm(dim=1) / n.clamp(min=1e-6)).clamp(0, 1)
         spread = torch.rad2deg(2 * torch.acos(mean_len))  # ~ full angle between sightings
         cov = ((n / float(setting(s, "coverage_good_views"))).clamp(max=1)
                * (spread / float(setting(s, "coverage_good_spread"))).clamp(max=1))
         cov = torch.where(n > 0, cov, torch.zeros_like(cov))
-    return cov, {"cameras": len(cams), "typical_distance": round(z_ref, 4)}
+    return Coverage(cov, dirmask, P, bins), {"cameras": len(cams),
+                                             "typical_distance": round(z_ref, 4)}
 
 
 # --------------------------------------------------------------------------- #
@@ -249,7 +299,8 @@ def report(view: SplatView, frames: list[dict], cam_idx: list[int], s: dict, out
     """Coverage of a finished splat: coverage_topdown.jpg, coverage.json, and the info dict."""
     import cv2
     import torch
-    cov, info = gaussian_coverage(view, frames, cam_idx, s)
+    cov_obj, info = gaussian_coverage(view, frames, cam_idx, s)
+    cov = cov_obj.score
     with torch.no_grad():
         means = view.splats["means"].detach().cpu().numpy().astype(np.float64)
         opa = torch.sigmoid(view.splats["opacities"]).detach().cpu().numpy()

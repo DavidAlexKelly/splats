@@ -276,14 +276,15 @@ def nearest_photo(ds, train_idx: list[int], cam: dict) -> int:
 
 def pick_gap_cameras(view, cov, ds, train_idx: list[int], n: int, shift: float,
                      up: np.ndarray, d: dict, rng: np.random.Generator):
-    """n novel cameras, most of them chosen because they look at gaps: `oversample` x n
+    """n novel cameras, most of them chosen because they look at gaps (surfaces no real photo
+    saw from about this view's direction, or nothing at all): `oversample` x n
     candidates (each from a different real camera, so they stay varied), each scored by the
     share of its low-resolution coverage image that is gap; coverage_share of the views are
     the best-scoring ones (skipping views that are almost all gap: Fixer would invent the
     lot), the rest are drawn at random. Returns (cameras, gap share of each, how many aimed)."""
     cand = novel_cameras(ds, train_idx, n * max(1, int(d["oversample"])), shift, up, d, rng)
-    gaps = np.array([float((1 - view.coverage_image(c, cov, scale=0.25)).mean().item())
-                     for c in cand])
+    gaps = np.array([float((1 - view.coverage_image(c, cov.for_view(c), scale=0.25))
+                           .mean().item()) for c in cand])
     usable = np.nonzero((gaps > 0.01) & (gaps <= float(d["max_gap_share"])))[0]
     n_gap = min(int(round(n * float(d["coverage_share"]))), len(usable))
     chosen = [int(k) for k in usable[np.argsort(-gaps[usable])][:n_gap]]
@@ -586,7 +587,7 @@ def refine(data_dir: Path, ply: Path, out_dir: Path, s: dict, d: dict) -> dict:
                     alphas.append(alpha)
                     renders.append(img)
                     if cov is not None:
-                        ci = view.coverage_image(cam, cov).cpu().numpy()
+                        ci = view.coverage_image(cam, cov.for_view(cam)).cpu().numpy()
                         weights.append(scene_coverage.gap_weight(ci, lo_c, hi_c, floor_c)
                                        .astype(np.float16))
                         observed.append(ci >= hi_c)

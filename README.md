@@ -390,7 +390,11 @@ the fact, on a finished splat (`pod_run.py` does this automatically after each v
 2. measures how well the real photos cover every part of the splat (the coverage map, see
    below) and renders the splat from viewpoints the drone never had (off the path, turned
    between the cube faces), at Fixer's native 1024x576. Three in four of those viewpoints
-   are picked because they look at gaps (`coverage_share`); the rest are random,
+   are picked because they look at gaps (`coverage_share`); the rest are random. For a new
+   viewpoint, a gap is a surface no real photo saw from about that direction (or empty
+   space). A far wall the drone saw straight on is therefore not a gap for a view near the
+   path, even though the map scores it low, because the map asks for views from several
+   angles,
 3. NVIDIA **Fixer** (Cosmos-Predict2 0.6B, single-step diffusion; the successor to Difix3D+)
    cleans each render,
 4. checks each cleaned view: where real photos already pin the scene down, Fixer should
@@ -428,8 +432,12 @@ or many from the same direction, can't fix where something is.
 The map shows the scene from above: red = poorly covered, green = well covered, blue =
 the flight path. The worst few gaps are numbered, and `coverage.json` lists them (centre,
 mean coverage, distance from the flight path) with the share of the solid Gaussians that are
-poorly covered. **Fly there next time**: a short extra pass beats any AI fill-in. The
-Fixer step aims at the same gaps.
+poorly covered. **Fly there next time**: a short extra pass beats any AI fill-in.
+
+Expect a red ring around the edges. From a flight path a few metres across, nothing far
+away is seen from 20 degrees apart, so fences, back walls and tree canopies score low even
+when every photo shows them: their position is uncertain, not their look. The Fixer step
+therefore uses a per-viewpoint check instead (see above).
 
 It runs in its own environment in the image (`/opt/fixer`, built by `pod/install_fixer.sh`;
 `--build-arg WITH_FIXER=0` leaves it out), started by `fixer_fix.py`. It needs a bfloat16

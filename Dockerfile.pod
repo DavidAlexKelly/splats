@@ -29,7 +29,7 @@ RUN (python3 -m venv /opt/vastcli && /opt/vastcli/bin/pip install --no-cache-dir
 RUN python -m pip install --no-cache-dir "anthropic>=0.40,<1" \
     && python -c "import anthropic; print('anthropic', anthropic.__version__)"
 
-COPY splat_pipeline.py train_gsplat.py depth_prior.py mapanything_init.py foundry_app.py splat_stream.py selftest.py naming.py scene_fill.py scene_coverage.py appearance.py scaffold.py scaffold_agent.py scaffold_prompt.md retrain.py fixer_fix.py fixer_refine.py pod_run.py config.yaml README.md /opt/app/
+COPY splat_pipeline.py train_gsplat.py depth_prior.py mapanything_init.py foundry_app.py splat_stream.py selftest.py naming.py scene_fill.py scene_coverage.py surface_fill.py appearance.py scaffold.py scaffold_agent.py scaffold_prompt.md retrain.py fixer_fix.py fixer_refine.py pod_run.py config.yaml README.md /opt/app/
 COPY pod/start.sh /opt/app/pod/start.sh
 RUN chmod +x /opt/app/pod/start.sh /opt/app/pod_run.py \
     && ln -sf /opt/app/pod_run.py /usr/local/bin/splat \

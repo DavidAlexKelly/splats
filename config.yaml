@@ -269,3 +269,7 @@ fixer:
   review: claude         # Claude rejects fixed views that invent things (needs the API key;
                          # ~$0.05 a round); "off" to skip
   review_views: 12       # views it checks per round (those with the most gap)
+  # Before the AI rounds, fill the hidden parts of the scaffold's solid surfaces (wall behind a
+  # bush, paving under a planter) by continuing their own pattern (surface_fill.py, no AI)
+  surface_fill: true
+  surface_fill_max_new: 400000  # new Gaussians at most (a coarser grid if more are hidden)

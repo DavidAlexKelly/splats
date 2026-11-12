@@ -53,6 +53,7 @@ sys.path.insert(0, str(HERE))
 import appearance  # noqa: E402
 import naming  # noqa: E402
 import scene_coverage  # noqa: E402
+import surface_fill  # noqa: E402
 import splat_pipeline as sp  # noqa: E402
 import train_gsplat as tg  # noqa: E402
 
@@ -95,6 +96,10 @@ FIXER_DEFAULTS = {
     "review": "claude",        # "claude": Claude rejects fixed views that invent things (needs
                                # an Anthropic key, ~$0.05 a round), "off"
     "review_views": 12,        # views Claude checks per round (those with the most gap)
+    # Before the AI rounds: fill the hidden parts of the scaffold's solid surfaces (wall behind
+    # a bush, paving under a planter) from the visible parts' own pattern (surface_fill.py; no
+    # AI). Undone like a round if it costs more than max_round_drop on held-out photos.
+    **{k: v for k, v in surface_fill.DEFAULTS.items()},
     "python": "/opt/fixer/bin/python",
     "model": "/opt/fixer/models/pretrained/pretrained_fixer.pkl",
 }
@@ -420,16 +425,22 @@ def refine(data_dir: Path, ply: Path, out_dir: Path, s: dict, d: dict) -> dict:
     total = int(d["rounds"]) * int(d["steps_per_round"])
     lrs = {"means": 1.6e-5 * ds.scene_scale, "scales": 5e-3, "quats": 1e-3,
            "opacities": 5e-2, "sh0": 2.5e-3, "shN": 2.5e-3 / 20}
-    optimizers = {k: torch.optim.Adam([{"params": splats[k], "lr": lr, "name": k}], eps=1e-15)
-                  for k, lr in lrs.items()}
-    scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizers["means"],
+
+    def make_training():
+        """Optimisers and MCMC state for the splat as it is now (after any surface fill)."""
+        opts = {k: torch.optim.Adam([{"params": splats[k], "lr": lr, "name": k}], eps=1e-15)
+                for k, lr in lrs.items()}
+        sched = torch.optim.lr_scheduler.ExponentialLR(opts["means"],
                                                        gamma=0.1 ** (1.0 / max(total, 1)))
-    strategy = MCMCStrategy(cap_max=n, refine_start_iter=200, refine_stop_iter=total)
-    strategy.check_sanity(splats, optimizers)
-    try:
-        state = strategy.initialize_state(scene_scale=ds.scene_scale)
-    except TypeError:
-        state = strategy.initialize_state()
+        strat = MCMCStrategy(cap_max=len(splats["means"]), refine_start_iter=200,
+                             refine_stop_iter=total)
+        strat.check_sanity(splats, opts)
+        try:
+            st = strat.initialize_state(scene_scale=ds.scene_scale)
+        except TypeError:
+            st = strat.initialize_state()
+        return opts, sched, strat, st
+
     use_expo = bool(s["exposure"])
     expo = torch.nn.Parameter(torch.zeros(len(ds), 3, 4, device=device))
     expo_opt = torch.optim.Adam([expo], lr=float(s["exposure_lr"]), eps=1e-15)
@@ -540,10 +551,45 @@ def refine(data_dir: Path, ply: Path, out_dir: Path, s: dict, d: dict) -> dict:
     before, before_raw = evaluate("before Fixer")
     stats = {"rounds": [], "before_psnr": before, "before_psnr_raw": before_raw,
              "gate": "raw" if raw_gate else "corrected"}
-    best = {"psnr": before_raw if raw_gate else before, "round": 0, "splats": snapshot()}
-    picker = ReferencePicker(ds, train_idx, render_depth_small, d) if int(d["previews"]) else None
     use_cov = bool(d.get("coverage", True))
     view = scene_coverage.SplatView(splats, s, sh_degree, bool(s.get("antialiased")))
+
+    # ---- fill the hidden parts of the big flat surfaces (no AI) ----------------------------
+    base_c, base_raw = before, before_raw
+    if bool(d.get("surface_fill")) and s.get("_scene_dir"):
+        try:
+            new, finfo = surface_fill.run(ds, Path(s["_scene_dir"]), view, train_idx, d, out_dir,
+                                          splats["shN"].shape[1], device)
+        except Exception as e:  # noqa: BLE001  (an extra: never lose the Fixer run over it)
+            log.warning("Surface fill skipped: %s: %s", type(e).__name__, e)
+            new, finfo = None, {"error": f"{type(e).__name__}: {e}"}
+        if new is not None:
+            n0 = len(splats["means"])
+            with torch.no_grad():
+                for k in list(splats.keys()):
+                    add = torch.from_numpy(new[k]).to(device, splats[k].dtype)
+                    splats[k] = torch.nn.Parameter(torch.cat([splats[k].detach(), add]))
+            after_c, after_raw = evaluate("after surface fill")
+            drop = (before_raw - after_raw) if raw_gate else (before - after_c)
+            if drop > float(d["max_round_drop"]):
+                log.warning("Surface fill lowered held-out PSNR by %.2f; undone", drop)
+                with torch.no_grad():
+                    for k in list(splats.keys()):
+                        splats[k] = torch.nn.Parameter(splats[k].detach()[:n0].clone())
+                finfo["kept"] = False
+            else:
+                log.info("Surface fill kept: %d new Gaussians; held-out PSNR %.2f -> %.2f",
+                         len(new["means"]), before_raw if raw_gate else before,
+                         after_raw if raw_gate else after_c)
+                finfo["kept"] = True
+                base_c, base_raw = after_c, after_raw
+            finfo.update(psnr_before=before, psnr_raw_before=before_raw,
+                         psnr_after=after_c, psnr_raw_after=after_raw)
+            torch.cuda.empty_cache()
+        stats["surface_fill"] = finfo
+    optimizers, scheduler, strategy, state = make_training()
+    best = {"psnr": base_raw if raw_gate else base_c, "round": 0, "splats": snapshot()}
+    picker = ReferencePicker(ds, train_idx, render_depth_small, d) if int(d["previews"]) else None
     lo_c, hi_c, floor_c = float(d["gap_low"]), float(d["gap_high"]), float(d["observed_weight"])
     if use_cov:  # the map of what Fixer is aiming at (same as the trainer's, for older results)
         try:
@@ -730,8 +776,8 @@ def refine(data_dir: Path, ply: Path, out_dir: Path, s: dict, d: dict) -> dict:
                 splats[k] = torch.nn.Parameter(best["splats"][k].to(device))
     stats["kept_round"] = best["round"]
     kept_r = next((r for r in stats["rounds"] if r["round"] == best["round"]), None)
-    stats["after_psnr"] = kept_r["psnr"] if kept_r else before
-    stats["after_psnr_raw"] = kept_r["psnr_raw"] if kept_r else before_raw
+    stats["after_psnr"] = kept_r["psnr"] if kept_r else base_c
+    stats["after_psnr_raw"] = kept_r["psnr_raw"] if kept_r else base_raw
     del best
     with torch.no_grad():
         kept, dropped = tg.write_ply(
@@ -782,6 +828,7 @@ def main():
     # Per-photo local colour grids let floaters hide behind corrections: never use them here,
     # even when an older bundle's config turned them on.
     s["bilagrid"] = False
+    s["_scene_dir"] = str(args.scene)  # its scaffold_decision.json, for the surface fill
     if (args.scene / "pose_adjust.json").exists():  # the trainer's refined cameras
         s["_pose_adjust"] = str(args.scene / "pose_adjust.json")
     d = {**FIXER_DEFAULTS, **(cfg.get("fixer") or {})}

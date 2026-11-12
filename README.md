@@ -420,6 +420,30 @@ also says how many views were aimed at gaps, their mean gap share, the mean trus
 many were dropped or rejected. Settings: `fixer:` in `config.yaml` (`coverage: false` gives
 the old behaviour: random views, every pixel learned equally).
 
+### Surface fill: the hidden parts of walls and paving (no AI)
+
+Before the Fixer rounds, `fixer_refine.py` fills in the hidden parts of the scaffold's solid
+surfaces (`surface_fill.py`), using the scaffold saved in the result's `scene/` bundle:
+
+1. every solid surface gets a fine texture grid (about one photo pixel per texel), and the
+   real photos are projected onto it. A texel counts as seen only when the splat's depth
+   there matches the plane, so a bush in front hides it.
+2. the unseen texels are filled only when photos found something *in front* of them (the
+   bush). Where photos see *past* the plane (an opening, or a plane slightly off the real
+   wall) or never looked, nothing is filled, because an opaque fill would cover real content.
+3. the fill continues the surface's own pattern. The broad light across it is extended
+   smoothly, and the detail (bricks, joints, slabs) is copied along the texture's own repeat,
+   found by autocorrelation, so courses and joints line up. On a test wall it was 3.5x
+   closer to the hidden truth than standard inpainting, which blurs.
+4. each filled texel becomes one thin, flat Gaussian on the plane. It stays hidden behind
+   the bush from the flight path and shows only when a viewer looks behind it.
+
+It is one flat image per surface and no generative model, so it can't invent objects or
+disagree with itself between views. Held-out photos are scored before and after; if the
+fill costs more than `max_round_drop` it is undone. The AI rounds then start from the
+filled splat. Check `surface_fill/<id>_<material>.jpg` (seen texture with the hidden part dark red |
+filled) and `surface_fill/surface_fill.json`. `surface_fill: false` turns it off.
+
 ### Coverage map: where the real photos don't reach
 
 Every result gets `coverage_topdown.jpg` and `coverage.json` (`scene_coverage.py`). Each

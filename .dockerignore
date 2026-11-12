@@ -13,6 +13,7 @@
 !naming.py
 !scene_fill.py
 !scene_coverage.py
+!surface_fill.py
 !fixer_fix.py
 !fixer_refine.py
 !appearance.py

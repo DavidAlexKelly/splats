@@ -1,0 +1,48 @@
+00:29:36 INFO    Re-extracting 214 selected frames from patio.mp4
+00:29:36 INFO    $ ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=p=0 /workspace/videos/patio.mp4
+00:29:36 INFO    Video resolution 7680x3840
+00:29:36 INFO    $ ffmpeg -hide_banner -loglevel error -i /workspace/videos/patio.mp4 -vf fps=6 -q:v 2 /workspace/work/fixer_patio_fixer_v2/patio/raw/%06d.jpg
+00:30:21 INFO    Extracted 427 frames
+00:30:34 INFO    Wrote 1284 images (214 frames x 6 views, cubemap layout, 1600px, f=800.0)
+00:30:38 INFO    Estimated which points each photo saw (1284 photos, 2 s)
+00:30:39 INFO    Loaded patio.ply: 3000000 Gaussians, SH degree 2; 1219 real training photos, 65 held out
+00:30:39 INFO    Rendering mode antialiased (matches how the splat was trained); bilateral grids off
+00:31:14 INFO    Fitted per-photo colour corrections for 2438 steps (splat frozen)
+00:31:16 INFO    EVAL before Fixer: held-out PSNR 28.09 on 65 real photos (27.28 without per-photo corrections)
+00:31:17 INFO    Coverage: 35.5% of the solid Gaussians are poorly covered by real photos (score < 0.30); worst gaps marked on coverage_topdown.jpg
+00:31:19 INFO    Round 1: 150 of 200 views aimed at gaps (mean gap share 56%)
+00:31:25 INFO    Round 1/3: 200 novel views at 33% of max offset; running Fixer
+00:31:25 INFO    $ /opt/fixer/bin/python /opt/app/fixer_fix.py --pairs /workspace/splats/patio_fixer_v2/_fixer_work/round1/pairs.json --model /opt/fixer/models/pretrained/pretrained_fixer.pkl --timestep 250 --width 1024 --height 576
+00:31:26 INFO      FIXER Transformer Engine unavailable (CalledProcessError: Command 'ldconfig -p | grep 'libcudnn.so'' returned non-zero exit status 1.); using the PyTorch stand-in
+00:31:28 INFO      [11-12 00:31:28|WARNING|../opt/fixer/lib/python3.12/site-packages/cosmos_predict2/pipelines/text2image.py:104:from_config] precision torch.bfloat16
+00:31:29 INFO      [11-12 00:31:29|INFO|../opt/fixer/lib/python3.12/site-packages/cosmos_predict2/tokenizers/tokenizer.py:801:__init__] Built tokenizer tokenizer
+00:31:29 INFO      [11-12 00:31:29|INFO|../opt/fixer/lib/python3.12/site-packages/cosmos_predict2/pipelines/text2image.py:150:from_config] Loading DiT from /opt/fixer/models/base/model_fast_tokenizer.pt
+00:31:30 INFO      [11-12 00:31:30|SUCCESS|../opt/fixer/lib/python3.12/site-packages/cosmos_predict2/pipelines/text2image.py:169:from_config] Successfully loaded DiT from /opt/fixer/models/base/model_fast_tokenizer.pt
+00:31:30 INFO      ==================================================
+00:31:30 INFO      SUCCESS in initializing Cosmos Model
+00:31:30 INFO      Number of parameters in UNet: 674.33M
+00:31:30 INFO      Number of parameters in VAE: 76.79M
+00:31:30 INFO      ==================================================
+00:31:30 INFO      loading from /opt/fixer/models/pretrained/pretrained_fixer.pkl
+00:31:31 INFO      ==================================================
+00:31:31 INFO      Number of trainable parameters in UNet: 674.33M
+00:31:31 INFO      Number of trainable parameters in VAE: 76.79M
+00:31:31 INFO      ==================================================
+00:31:31 INFO      FIXER loaded in 5s on NVIDIA RTX PRO 6000 Blackwell Server Edition (attention: torch)
+00:31:43 INFO      FIXER 50/200 images (4.2/s)
+00:31:54 INFO      FIXER 100/200 images (4.5/s)
+00:32:04 INFO      FIXER 150/200 images (4.6/s)
+00:32:14 INFO      FIXER 200/200 images (4.7/s)
+00:32:14 INFO      {"fixer_done": 200, "attention": "torch", "seconds": 47.7, "peak_vram_gb": 2.09}
+00:32:25 INFO    HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+00:32:25 INFO    Round 1: Claude checked 12 fixed views and rejected 0
+00:32:37 INFO      step 250/4500  loss 0.0335  (1.3 min)
+00:32:51 INFO      step 500/4500  loss 0.0075  (1.6 min)
+00:33:05 INFO      step 750/4500  loss 0.0520  (1.8 min)
+00:33:18 INFO      step 1000/4500  loss 0.0419  (2.0 min)
+00:33:32 INFO      step 1250/4500  loss 0.0083  (2.2 min)
+00:33:45 INFO      step 1500/4500  loss 0.0209  (2.5 min)
+00:33:47 INFO    EVAL after round 1: held-out PSNR 26.79 on 65 real photos (26.15 without per-photo corrections)
+00:33:47 WARNING Round 1 lowered held-out PSNR 27.28 -> 26.15; going back to round 0 and stopping (later rounds go even further from the path)
+00:33:48 INFO    Fixer refinement: held-out PSNR on real photos 27.28 -> 27.28 as viewers see it (kept round 0; the gain is mostly in views the drone never saw)
+FIXER_REFINE_DONE {"before_psnr_raw": 27.276954786512366, "after_psnr_raw": 27.276954786512366, "kept_round": 0, "gaussians": 3000000, "minutes": 2.5}

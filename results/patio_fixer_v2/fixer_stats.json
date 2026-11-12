@@ -1,0 +1,127 @@
+{
+  "rounds": [
+    {
+      "round": 1,
+      "shift": 0.049999999999999996,
+      "views": 200,
+      "psnr": 26.791251050960145,
+      "psnr_raw": 26.153008301050047,
+      "aimed_at_gaps": 150,
+      "mean_gap_share": 0.5645,
+      "dropped_low_trust": 0,
+      "rejected_by_review": 0,
+      "mean_trust": 0.995
+    }
+  ],
+  "before_psnr": 28.09158394034482,
+  "before_psnr_raw": 27.276954786512366,
+  "gate": "raw",
+  "coverage_before": {
+    "cameras": 256,
+    "typical_distance": 13.9323,
+    "solid_gaussians": 354012,
+    "poorly_covered_share": 0.3555,
+    "mean_coverage": 0.5408,
+    "worst_gaps": [
+      {
+        "rank": 1,
+        "centre": [
+          10.14,
+          10.494,
+          16.81
+        ],
+        "mean_coverage": 0.011,
+        "gaussians": 1987,
+        "distance_to_flight_path": 18.048
+      },
+      {
+        "rank": 2,
+        "centre": [
+          -19.39,
+          14.342,
+          -15.509
+        ],
+        "mean_coverage": 0.007,
+        "gaussians": 1882,
+        "distance_to_flight_path": 20.252
+      },
+      {
+        "rank": 3,
+        "centre": [
+          -10.556,
+          12.351,
+          -18.325
+        ],
+        "mean_coverage": 0.055,
+        "gaussians": 1467,
+        "distance_to_flight_path": 17.306
+      },
+      {
+        "rank": 4,
+        "centre": [
+          -19.23,
+          8.303,
+          -6.699
+        ],
+        "mean_coverage": 0.065,
+        "gaussians": 1397,
+        "distance_to_flight_path": 16.048
+      },
+      {
+        "rank": 5,
+        "centre": [
+          -13.345,
+          1.373,
+          20.34
+        ],
+        "mean_coverage": 0.01,
+        "gaussians": 1111,
+        "distance_to_flight_path": 20.474
+      }
+    ]
+  },
+  "kept_round": 0,
+  "after_psnr": 28.09158394034482,
+  "after_psnr_raw": 27.276954786512366,
+  "faint_share": 0.3696,
+  "gaussians": 3000000,
+  "minutes": 2.5,
+  "settings": {
+    "rounds": 3,
+    "views_per_round": 200,
+    "steps_per_round": 1500,
+    "novel_ratio": 0.3,
+    "novel_weight": 0.3,
+    "max_shift": 0.15,
+    "yaw_jitter": 35,
+    "pitch_jitter": 25,
+    "render_width": 1024,
+    "render_height": 576,
+    "hfov": 90,
+    "timestep": 250,
+    "gate": "raw",
+    "alpha_mask": 0.0,
+    "previews": 6,
+    "ref_candidates": 6,
+    "opacity_entropy": 0.003,
+    "appearance_warmup": "auto",
+    "max_round_drop": 0.3,
+    "coverage": true,
+    "coverage_share": 0.75,
+    "oversample": 4,
+    "max_gap_share": 0.7,
+    "gap_low": 0.3,
+    "gap_high": 0.6,
+    "observed_weight": 0.25,
+    "conf_diff_ok": 0.04,
+    "conf_diff_bad": 0.15,
+    "min_view_conf": 0.2,
+    "conf_no_anchor": 0.5,
+    "review": "claude",
+    "review_views": 12,
+    "python": "/opt/fixer/bin/python",
+    "model": "/opt/fixer/models/pretrained/pretrained_fixer.pkl"
+  },
+  "generated_content": true,
+  "model": "NVIDIA Fixer (nvidia/Fixer, NVIDIA Open Model License)"
+}

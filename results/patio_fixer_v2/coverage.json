@@ -1,0 +1,64 @@
+{
+  "cameras": 256,
+  "typical_distance": 13.9323,
+  "solid_gaussians": 354012,
+  "poorly_covered_share": 0.3555,
+  "mean_coverage": 0.5408,
+  "worst_gaps": [
+    {
+      "rank": 1,
+      "centre": [
+        10.14,
+        10.494,
+        16.81
+      ],
+      "mean_coverage": 0.011,
+      "gaussians": 1987,
+      "distance_to_flight_path": 18.048
+    },
+    {
+      "rank": 2,
+      "centre": [
+        -19.39,
+        14.342,
+        -15.509
+      ],
+      "mean_coverage": 0.007,
+      "gaussians": 1882,
+      "distance_to_flight_path": 20.252
+    },
+    {
+      "rank": 3,
+      "centre": [
+        -10.556,
+        12.351,
+        -18.325
+      ],
+      "mean_coverage": 0.055,
+      "gaussians": 1467,
+      "distance_to_flight_path": 17.306
+    },
+    {
+      "rank": 4,
+      "centre": [
+        -19.23,
+        8.303,
+        -6.699
+      ],
+      "mean_coverage": 0.065,
+      "gaussians": 1397,
+      "distance_to_flight_path": 16.048
+    },
+    {
+      "rank": 5,
+      "centre": [
+        -13.345,
+        1.373,
+        20.34
+      ],
+      "mean_coverage": 0.01,
+      "gaussians": 1111,
+      "distance_to_flight_path": 20.474
+    }
+  ]
+}
